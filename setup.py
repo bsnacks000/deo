@@ -2,7 +2,9 @@ from setuptools import setup, find_packages
 
 req = [
     'marshmallow>3.1',
-    'click'
+    'orjson',
+    'dask', 
+    'distributed'
 ]
 
 setup(

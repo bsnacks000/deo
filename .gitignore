@@ -1,6 +1,7 @@
 *ipynb
 DEV-IDEAS.md 
 .vscode/
+dask-*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
