@@ -1,8 +1,8 @@
 import marshmallow as ma  
+import orjson 
 
 
-
-class StringOrInt(ma.fields.Field):
+class StringOrInt(ma.fields.Integer):
     """ Attempts to satisfy the JSON-RPC spec that states that an id can be either an Integer, String or None.
     """
 
@@ -11,11 +11,10 @@ class StringOrInt(ma.fields.Field):
             return 
         
         elif isinstance(value, int):
-            field_class = ma.fields.Integer
             return ma.fields.Integer._serialize(self, value, attr, obj, **kwargs)
         
         elif isinstance(value, str):
-            return ma.fields.Str._serialize(self,value,attr, attr, obj, **kwargs)  
+            return ma.fields.Str._serialize(self, value, attr, attr, obj, **kwargs)  
 
         else:
             raise ma.ValidationError('Must be a string or an int')
@@ -26,11 +25,10 @@ class StringOrInt(ma.fields.Field):
             return 
         
         elif isinstance(value, int):
-            field_class = ma.fields.Integer
-            return ma.fields.Integer._deserialize(self, value, attr, obj, **kwargs)
+            return ma.fields.Integer._deserialize(self, value, attr, data, **kwargs)
         
         elif isinstance(value, str):
-            return ma.fields.Str._deserialize(self,value,attr, attr, obj, **kwargs)  
+            return ma.fields.Str._deserialize(self, value,attr, data, **kwargs)  
 
         else:
             raise ma.ValidationError('Must be a string or an int')
@@ -54,15 +52,67 @@ class _JsonRPCErrorSchema(ma.Schema):
     data = ma.fields.Dict(required=False, default={}) 
 
 
+
+class ContextData(object):
+    """ A Request Context 
+    """
+
+    def __init__(self, method='', jsonrpc="2.0", id=None, error={}, result={}, params=None):
+        self.method = method 
+        self.jsonrpc = jsonrpc 
+        self.id = id 
+        self.error = error 
+        self.result = result 
+        self.params = params
+
+    
+    def to_json(self):
+        return orjson.dumps(vars(self))
+
+
+
+class JsonRPCSchemaOpts(ma.SchemaOpts):
+
+    def __init__(self, meta, **kwargs):
+        super().__init__(meta, **kwargs)
+        self.contextdata_class = getattr(meta, 'contextdata_class', ContextData)
+        if self.contextdata_class is None:
+            raise ValueError('`contextdata_class` must be set on a ContextDataSchema')
+        if not isinstance(self.contextdata_class(), ContextData):
+            raise ValueError('`contextdata_class` must be set to ContextData or a subclass')
+
+
+
 class JsonRPCSchema(ma.Schema):
-    """ The default schema for a JSON-RPC method. Note that params are optional. A method should 
-    register a subclass of this class with an overridden result and params fields that will contain 
+    """ The default schema for a JSON-RPC method. It contains read and write only fields containing metadata, error and result. 
+    Note that params are optional. A method should register a subclass of this class with an overridden result and params fields that will contain 
     nested implementations of the schemas. 
     """
 
-    jsonrpc = ma.fields.Str(required=True, default="2.0")
+    jsonrpc = ma.fields.Str(required=False, default="2.0")
     id = StringOrInt(required=False, allow_none=True)
     method = ma.fields.Str(required=True, load_only=True)
     error = ma.fields.Nested(_JsonRPCErrorSchema, required=False, dump_only=True)    
     result = ma.fields.Nested(_JsonRPCDefaultDetailSchema, required=True, dump_only=True)
     
+    OPTIONS_CLASS = JsonRPCSchemaOpts
+
+    class Meta:
+        contextdata_class = ContextData
+
+
+    @ma.validates_schema 
+    def validate_jsonrpc(self, data, **kwargs):
+        if data['jsonrpc'] != '2.0':
+            raise ValidationError('jsonrpc must be set to 2.0')
+    
+
+    @ma.post_load
+    def make_context(self, data, **kwargs):
+        return self.opts.contextdata_class(**data)
+    
+    @ma.pre_dump 
+    def dump_context(self, contextdata, **kwargs):
+        if not isinstance(contextdata, self.opts.contextdata_class):
+            raise ma.ValidationError('Object must be of type ContextData')
+        return contextdata.to_json()
