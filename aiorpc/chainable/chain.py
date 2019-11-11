@@ -15,61 +15,43 @@ import inspect
 import copy
 
 from pprint import pprint
+from .exceptions import ChainArgValueError, ChainWrapperError, JoinKeyError, InvalidMethodError
 
 
-
-class ChainWrapperError(Exception):
-    """ Wraps an exception thrown in the method call chain"""
-
-
-class InvalidMethodError(Exception):
-    """Thrown if the Chain is passed an invalid method call """
-
-
-class JoinKeyError(KeyError):
-    """ Thrown when a bad key is found"""
-
-
-class ChainArgValueError(ValueError):
-    """ thrown if arguments in the chained function are misaligned """
-
-
-class ChainableContainerProxy(collections.abc.MutableSequence):
-    """ An object that wraps a list of dicts or a list of list of dicts.
+class ChainableMappingProxy(collections.abc.MutableMapping):
+    """ This is a proxy to a dict_ object. Its purpose is simply to create 
+    a type that our chainable API will expect
     """
-    def __init__(self, iterable=[]):
-        iter(iterable) # this will raise a TypeError if not an iterable
-        self._iterable = iterable
+    def __init__(self, dict_={}):
+        self._dict = dict_
+
+    @property 
+    def dict_(self):
+        return self._dict 
 
 
-    def __getitem__(self, index):
-        return self._iterable[index]
+    def __getitem__(self, key):
+        return self._dict[key]
 
 
     def __len__(self):
-        return len(self._iterable)
+        return len(self._dict)
+
+    
+    def __iter__(self):
+        return iter(self._dict)
 
 
-    def __setitem__(self, index, value):
-        self._iterable[index] = value
+    def __setitem__(self, key, value):
+        self._dict[key] = value
 
 
-    def __delitem__(self, index):
-        del self._iterable[index]
-
-
-    def insert(self, index, value):
-        self._iterable.insert(index, value)
-
-
-    def dump(self):
-        """ dump a new instnace of self._iterable
-        """
-        return list(self._iterable)
+    def __delitem__(self, key):
+        del self._dict[key]
 
 
     def __repr__(self):
-        return self._iterable.__repr__()
+        return self._dict.__repr__()
 
 
 class Chain(object):
@@ -134,11 +116,8 @@ class _Chainable(object):
         if chainable._schema is not None:
             schema = chainable._schema
 
-        # pprint(chainable.args)
-        # pprint(chainable.kwargs)
-
         res = chainable.method(schema, *chainable.args, **chainable.kwargs)
-        return ChainableContainerProxy(res)
+        return ChainableMappingProxy(res)
 
 
     def __call__(self, *args, **kwargs):
@@ -162,49 +141,37 @@ def _reconcile_non_default_args(argspec):
     return {a:[] for a in args}
 
 
-def _create_args(proxy, argspec, categorical=[]):
-    """ given a list of schema, extract only the keys specified in the method signature.
-    if project_scalars_to is set to an argument name, will duplicate a value len(arg) number of times
-    and send as a list. Otherwise it will send as a single value to the caller.
-    This allows us to create column vectors that can be joined in calling function.
+def _create_args(proxy, argspec):
+    """ proxy -> ChainableMappingProxy (dict_)
     """
     args = _reconcile_non_default_args(argspec)
-    # print("args")
-    # print(args)
-    for schema in proxy:
-        for arg, lst in args.items():
-            if arg not in schema:
-                raise ChainArgValueError('The arg {} was not present in the current schema'.format(arg))
-
-            if arg in categorical:
-                for arg in categorical:
-                    args[arg] += [schema[arg]] #* len(schema[project_scalars_to_vec])
-
+    for arg, lst in args.items():
+        if arg not in proxy:
+            raise ChainArgValueError('The arg {} was not present in the current schema'.format(arg))
+        else:
+            if isinstance(proxy[arg], list):
+                args[arg] += proxy[arg]
             else:
-                if isinstance(schema[arg], list):
-                    args[arg] += schema[arg]
-                else:
-                    args[arg] = schema[arg]
-
+                args[arg] = proxy[arg]
     return args
 
-def _update_proxy(proxy, output_data, join_key, result_key):
-    """ given the origin schema_lst and new output_data, write the updated keys into the new dict on the specified result key. The join
-    key is used to bind the data together. In dcasdb this is most likely always going to be bdbid.
-    This should be the only method where the state of the schema data is manipulated.
-    """
 
-    for schema in proxy:
-        try:
-            key = schema[join_key]  # get the bdbid or other distinct value
-            schema[result_key] = [rec for rec in output_data if rec[join_key] == key]  # filter all recs on this key and extend the input-schema
-        except KeyError as err:
-            raise JoinKeyError('The join key "{}" was not found'.format(join_key)) from err
+# def _update_proxy(proxy, output_data, join_key, result_key):
+#     """ given the origin schema_lst and new output_data, write the updated keys into the new dict on the specified result key. The join
+#     key is used to bind the data together. This should be the only method where the state of the schema data is manipulated.
+#     """
 
-    return proxy
+#     for schema in proxy:
+#         try:
+#             key = schema[join_key]  # get the bdbid or other distinct value
+#             schema[result_key] = [rec for rec in output_data if rec[join_key] == key]  # filter all recs on this key and extend the input-schema
+#         except KeyError as err:
+#             raise JoinKeyError('The join key "{}" was not found'.format(join_key)) from err
+
+#     return proxy
 
 
-def chained(result_key, join_key='', categorical=[]):
+def chained(result_key):
     """ A decorator that takes lists of 1:n schema dumped by the application. It essentially handles chainable errors and manipulates the
     state of the schema list that was provided by the application. The needed input data is extracted from all schemas in _create_args.
     After the mapped method is run, new data is appended to the schema_lst via _update_schema_list
@@ -218,26 +185,17 @@ def chained(result_key, join_key='', categorical=[]):
         @functools.wraps(method)
         def _inner(*args, **kwargs):
 
-            if not isinstance(args[0], ChainableContainerProxy):  # if we're not in a chain simply treat like a normal function
+            if not isinstance(args[0], ChainableMappingProxy):  # if we're not in a chain simply treat like a normal function
                 return method(*args, **kwargs)
 
             try:
                 proxy = args[0]
                 argspec = inspect.getfullargspec(method)
-                args_dict = _create_args(proxy, argspec, categorical)  # build a dict of args k,v pairs
+                args_dict = _create_args(proxy, argspec) #, categorical)  # build a dict of args k,v pairs
                 all_args ={**args_dict, **kwargs} # combine with current kwargs
-                
-                # XXX This is just a sanity check 
-                # pprint(all_args.keys())
-                # for k,v in all_args.items():
-                #     if isinstance(v, list):
-                #         print('arg: ')
-                #         pprint(v[:3])
-                #     else:
-                #         print('arg: ', v)
-
                 output_data = method(**all_args)  #output a list of records
-                updated_proxy = _update_proxy(proxy, output_data, join_key, result_key)  # merge into original schema_list
+               # updated_proxy = _update_proxy(proxy, output_data)  # merge into original schema_list
+                proxy[result_key] = output_data
 
             except Exception as err:
                 e = ChainWrapperError('There was an error in the chain. Access "context" var for the accumulated schema')
@@ -248,13 +206,13 @@ def chained(result_key, join_key='', categorical=[]):
                     'traceback': traceback.format_exc()
                 }
                 raise e from err
-            return updated_proxy
+            return proxy
         return _inner
     return _decorator
 
 
-def get_chained(chained_func):
-    """ simple helper to fetch the wrapped chain function for testing or standalone purposes without having
-    to touch the internals.
-    """
-    return chained_func.__wrapped__
+# def get_chained(chained_func):
+#     """ simple helper to fetch the wrapped chain function for testing or standalone purposes without having
+#     to touch the internals.
+#     """
+#     return chained_func.__wrapped__

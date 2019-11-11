@@ -66,8 +66,8 @@ class ContextData(object):
         self.params = params
 
     
-    def to_json(self):
-        return orjson.dumps(vars(self))
+    def to_dict(self):
+        return vars(self).copy()
 
 
 
@@ -115,4 +115,4 @@ class JsonRPCSchema(ma.Schema):
     def dump_context(self, contextdata, **kwargs):
         if not isinstance(contextdata, self.opts.contextdata_class):
             raise ma.ValidationError('Object must be of type ContextData')
-        return contextdata.to_json()
+        return contextdata.to_dict()
