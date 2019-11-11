@@ -2,6 +2,27 @@ import marshmallow as ma
 import orjson 
 
 
+
+class ContextData(object):
+    """ A Request Context 
+    """
+
+    def __init__(self, method='', jsonrpc="2.0", id=None, error={}, result={}, params=None):
+        self.method = method 
+        self.jsonrpc = jsonrpc 
+        self.id = id 
+        self.error = error 
+        self.result = result 
+        self.params = params
+
+
+    def to_dict(self):
+        return vars(self).copy()
+
+
+    
+
+
 class StringOrInt(ma.fields.Integer):
     """ Attempts to satisfy the JSON-RPC spec that states that an id can be either an Integer, String or None.
     """
@@ -50,24 +71,6 @@ class _JsonRPCErrorSchema(ma.Schema):
     code = ma.fields.Integer(required=True)
     message = ma.fields.Str(required=True)
     data = ma.fields.Dict(required=False, default={}) 
-
-
-
-class ContextData(object):
-    """ A Request Context 
-    """
-
-    def __init__(self, method='', jsonrpc="2.0", id=None, error={}, result={}, params=None):
-        self.method = method 
-        self.jsonrpc = jsonrpc 
-        self.id = id 
-        self.error = error 
-        self.result = result 
-        self.params = params
-
-    
-    def to_dict(self):
-        return vars(self).copy()
 
 
 

@@ -44,5 +44,5 @@ class InvalidParams(AiorpcException):
 
 class InternalError(AiorpcException):
     error_code = -32603
-    message = 'An internal JSON-Rpc error occurred.'
+    message = 'An internal error occurred.'
 

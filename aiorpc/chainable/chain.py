@@ -154,22 +154,7 @@ def _create_args(proxy, argspec):
             else:
                 args[arg] = proxy[arg]
     return args
-
-
-# def _update_proxy(proxy, output_data, join_key, result_key):
-#     """ given the origin schema_lst and new output_data, write the updated keys into the new dict on the specified result key. The join
-#     key is used to bind the data together. This should be the only method where the state of the schema data is manipulated.
-#     """
-
-#     for schema in proxy:
-#         try:
-#             key = schema[join_key]  # get the bdbid or other distinct value
-#             schema[result_key] = [rec for rec in output_data if rec[join_key] == key]  # filter all recs on this key and extend the input-schema
-#         except KeyError as err:
-#             raise JoinKeyError('The join key "{}" was not found'.format(join_key)) from err
-
-#     return proxy
-
+    
 
 def chained(result_key):
     """ A decorator that takes lists of 1:n schema dumped by the application. It essentially handles chainable errors and manipulates the
