@@ -5,8 +5,9 @@ from .parsers import JSONByteParser
 from .registry import EntrypointRegistry 
 from .exceptions import AiorpcException, ParseError, MethodNotFound, \
     InvalidRequest, InvalidParams, InternalError, ChainError
+from .schemas import ContextData
 
-from orjson import JSONDecodeError, JSONEncodeError
+import orjson
 
 import concurrent.futures 
 import logging 
@@ -20,29 +21,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
-def _handle_error_detail_from_exception(exc, contextdata_handler, data={}):
-    """ This handler is used inside the threadpool. 
-    """
-    detail =  {
-        'code': exc.error_code, 
-        'message': exc.message, 
-        'data': data
-    }
-    contextdata_handler.write_to_error(detail)      
-    return contextdata_handler.dump_data()
+# these extra handlers are need in the threadpool
 
 
 def _handle_bad_decode():
     """ Since we might have to parse a list this gets before a context is established. 
     """
-    return {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}
+    return 
 
 
-def _handle_null_batch(data):
+def _handle_null_batch():
     """ This is a special handler because we don't have a context yet. 
     """
-    return {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}, "id": null}
+    return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}, "id": None})
 
 
 def _check_params(params, entry):
@@ -117,42 +108,53 @@ class Application(object):
     def _decode_request(self, data):
         try:
             return self.parser.decode(data)
-            return d 
-        except JSONDecodeError as err:
+        except orjson.JSONDecodeError as err:
             raise ParseError from err 
 
     def _encode_response(self, obj):
         try:
-            if obj['id'] is not None:
+            if obj['id'] is not None:  # <-- handles rpc-notifications though we don't plan on using it.
                 return self.parser.encode(obj)
-        except JSONEncodeError as err:
+        except orjson.JSONEncodeError as err:
             raise ParseError from err 
+
+    
+    def _handle_error_detail_from_exception(self, exc, contextdata_handler, data={}):
+        """ This handler is used inside the threadpool. This writes and 
+        """
+        detail =  { 'code': exc.error_code, 'message': exc.message, 'data': data}
+        contextdata_handler.write_to_error(detail)      
+        return contextdata_handler.dump_data()
+
 
     # TODO << this is not finished... error handling needed. All errors should map to an error object call with RPC errors.
     def _run_in_executor(self, data):
-        """ Blocking calls happen in a threadpool executor
+        """ This is the main call that gets run on the threadpool executor. Most RPC exceptions are handled here except a 
+        few that can occur before we have access to a context handler. 
         """        
         try:
             contextdata_handler = ContextDataHandler(data)  # <--- push data into contextdata handler 
    
             if 'method' not in data:
                 logger.error('Invalid request')
-                raise InvalidRequest # < no context yet 
+                raise InvalidRequest # < no context yet this is a problem for error handling.
 
+            # XXX this is a problem... we nned the entrypoint to get the schema reference, but we need the schema 
+            # to correctly write the error object. I need to decouple these pieces somehow... 
             try:
-                entry = self._entrypoint_registry.get_entrypoint(data['method'])  # <-- XXX error handling 
+                entry = self._entrypoint_registry.get_entrypoint(data['method']) 
             except KeyError as err:
                 logger.error('Method not found')
-                raise MethodNotFound from err  # < not context yet 
+                raise MethodNotFound from err  # <--- XXX no context yet this is a problem for error handling.  
 
             try:
-                contextdata_handler.initialize_schema(entry.schema_class)   # <--- XXX error on load must be handled
+                contextdata_handler.initialize_schema(entry.schema_class)   
             except ma.ValidationError as err:
                 logger.error('Invalid request')
                 raise InvalidRequest from err  
-                    
-            params = contextdata_handler.get_params() 
-            _check_params(params)
+            
+            params = contextdata_handler.get_params() # XXX this is an important step that is difficult to do correctly. 
+            #_check_params(params)
 
             try:
                 if params is None:
@@ -161,20 +163,22 @@ class Application(object):
                     res = entry.func(*params)
                 else:
                     res = entry.func(**params)
-                contextdata_handler.write_to_result(res)    
+                contextdata_handler.write_to_result(res)    # <--- write to result here
+                response = contextdata_handler.dump_data()
+                
             except ChainError as err: 
-                logger.error('A Chain error occurred')
-                data = _handle_error_detail_from_exception(err, contextdata_handler, data=err.context) 
+                logger.error('A Chain error occurred. Recovered data in error detail')
+                response = self._handle_error_detail_from_exception(err, contextdata_handler, data=err.context) 
                 
             except Exception as err:
                 logger.error('An unhandled exception occured.')
                 raise InternalError from err 
 
         except AiorpcException as err:
-            data = _handle_error_detail_from_exception(err, contextdata_handler, data={'detail': traceback.format_tb()}) 
+            response = self._handle_error_detail_from_exception(err, contextdata_handler, data={'detail': traceback.format_tb(err.__traceback__)}) 
     
         finally:
-            return self._encode_response(data)
+            return self._encode_response(response)  # <--- ensure response is encoded no matter what
 
 
     async def handle_request(self, raw_request):
@@ -187,22 +191,25 @@ class Application(object):
         try:
             data = await self.loop.run_in_executor(self._executor, self._decode_request, raw_request)
         except ParseError as err:
-            return _handle_bad_decode()
+            return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}) # <-- short circut and send a standard error. No need to even put
 
         if isinstance(data, list):
-            if len(data) == 0:  # handle empty list here (technically valid json)
-                return _handle_null_batch(data)
+            if len(data) == 0:  # handle empty list here (technically valid json, but not good for rpc)... short circuit
+                return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}, "id": None})
             futures = [self.loop.run_in_executor(self._executor, self._run_in_executor, req) for req in data]        
             return await asyncio.gather(*futures)
         else:
             return await self.loop.run_in_executor(self._executor, self._run_in_executor, data)
 
 
+
 class _JSONRPCProtocol(asyncio.Protocol):
+
 
     def __init__(self, app): 
         self.app = app 
         self.loop = asyncio.get_event_loop()
+
 
     def connection_made(self, transport):
         peername = transport.get_extra_info('peername')
@@ -211,19 +218,16 @@ class _JSONRPCProtocol(asyncio.Protocol):
 
     
     def data_received(self, data):
-        
         logger.info(' <---- ʕ•ᴥ•ʔ Data received: {!r}'.format(data))
         task = self.loop.create_task(self.app.handle_request(data))
         task.add_done_callback(self._task_response_callback)    
 
 
     def _task_response_callback(self, task):
-        # error handler needs to be wrapped around this one 
         data = task.result()  # <-- returns from app.handle_request     
         if data is not None:
             logger.info(' ----> (~‾▿‾)~  Sending: {!r}'.format(data))
             self.transport.write(data)
-
         logger.info(' ----> Closing Connection:  ¯\_(ツ)_/¯')
         self.transport.close()
 
