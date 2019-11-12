@@ -4,15 +4,13 @@ import orjson
 
 
 class ContextData(object):
-    """ A Request Context 
+    """ A Request Context container object.
     """
 
-    def __init__(self, method='', jsonrpc="2.0", id=None, error={}, result={}, params=None):
+    def __init__(self, method='', jsonrpc="2.0", id=None, params=None):
         self.method = method 
         self.jsonrpc = jsonrpc 
         self.id = id 
-        self.error = error 
-        self.result = result 
         self.params = params
 
 
@@ -21,8 +19,6 @@ class ContextData(object):
 
 
     
-
-
 class StringOrInt(ma.fields.Integer):
     """ Attempts to satisfy the JSON-RPC spec that states that an id can be either an Integer, String or None.
     """
@@ -96,12 +92,14 @@ class JsonRPCSchema(ma.Schema):
     id = StringOrInt(required=False, allow_none=True)
     method = ma.fields.Str(required=True, load_only=True)
     error = ma.fields.Nested(_JsonRPCErrorSchema, required=False, dump_only=True)    
-    result = ma.fields.Nested(_JsonRPCDefaultDetailSchema, required=True, dump_only=True)
+    result = ma.fields.Nested(_JsonRPCDefaultDetailSchema, required=False, dump_only=True)
     
     OPTIONS_CLASS = JsonRPCSchemaOpts
 
     class Meta:
         contextdata_class = ContextData
+        load_only = ('params',)
+        dump_only = ('result', 'error',)
 
 
     @ma.validates_schema 

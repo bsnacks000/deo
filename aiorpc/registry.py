@@ -1,7 +1,6 @@
 import collections
 from marshmallow import class_registry as ma_class_registry
-# XXX in-lieu of creating our own seperate schema registry I'm using marshmallows to fetch the class here.
-from . import utils
+import inspect
 
 
 class RegistryEntryError(KeyError):
@@ -13,29 +12,38 @@ class _RegistryEntry(object):
     """ basic registry entry for a function in our api
     """
 
-    def __init__(self, func=None, name='', args=(), kwargs={}, schema_class=None):
+    def __init__(self, func=None, name='', args=(), schema_class=None):
         self.name = name
         self.func = func
         self.args = args
-        self.kwargs = kwargs
         self.schema_class = schema_class 
+
+
+def inspect_function(func):
+    """ and return a dict keyed with its properties and method signatures in order to perform dynamic mapping.
+    """
+    argspec = inspect.getfullargspec(func)
+    # print(argspec)
+    return {
+        'name': func.__name__,
+        'args': argspec.args,
+    }
 
 
 def create_entrypoint(func, schema_name=''):
     """ Create a new entry class.
     """
-    funcmeta = utils.inspect_function(func)
+    funcmeta = inspect_function(func)
     schema_class = ma_class_registry.get_class(schema_name) # <-- fetch schema class here
     return _RegistryEntry(
         func=func,
         args=funcmeta['args'],
-        kwargs=funcmeta['kwargs'],
         name=funcmeta['name'],
         schema_class=schema_class,
     )
 
 
-class Registry(object):
+class EntrypointRegistry(object):
     """ Holds a registry of methods(entrypoints) for the application. 
     """
 
@@ -47,16 +55,16 @@ class Registry(object):
         try:
             return self._registry[func]   # <--- raises a KeyError if not found but possibly should be wrapped.
         except KeyError as err:
-            raise RegistryEntryError('The entrypoint {} was not found in the  registry.'.format(func.__name__))
+            raise RegistryEntryError('The entrypoint {} was not found in the registry.'.format(func))
+
 
     def _update_registry(self, entry):
         """ Update the registry using both func and funcname as keys that point to the same entry.
         """
-        self._registry[entry.func] = entry
         self._registry[entry.name] = entry
 
 
-    def entrypoint(self, schema_name):
+    def register(self, schema_name):
         """ Creates an entrypoint for an application in the registry.
         """
         def _constructor(func):
