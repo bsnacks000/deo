@@ -31,7 +31,7 @@ class StringOrInt(ma.fields.Integer):
             return ma.fields.Integer._serialize(self, value, attr, obj, **kwargs)
         
         elif isinstance(value, str):
-            return ma.fields.Str._serialize(self, value, attr, attr, obj, **kwargs)  
+            return ma.fields.Str._serialize(self, value, attr, obj, **kwargs)  
 
         else:
             raise ma.ValidationError('Must be a string or an int')
@@ -45,7 +45,7 @@ class StringOrInt(ma.fields.Integer):
             return ma.fields.Integer._deserialize(self, value, attr, data, **kwargs)
         
         elif isinstance(value, str):
-            return ma.fields.Str._deserialize(self, value,attr, data, **kwargs)  
+            return ma.fields.Str._deserialize(self, value, attr, data, **kwargs)  
 
         else:
             raise ma.ValidationError('Must be a string or an int')

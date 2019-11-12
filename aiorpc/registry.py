@@ -1,10 +1,7 @@
 import collections
 from marshmallow import class_registry as ma_class_registry
+from .exceptions import RegistryEntryError
 import inspect
-
-
-class RegistryEntryError(KeyError):
-    """ Raised if the key is not present in the WorfklowRegistry"""
 
 
 

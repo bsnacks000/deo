@@ -14,13 +14,13 @@ class Client(object):
         'method': None
     }
 
-    def __init__(self, addr, port, max_bytes=1048576):
+    def __init__(self, addr='127.0.0.1', port=6666, max_bytes=1048576):
         self.addr = addr 
         self.port = port  
         self.max_bytes = max_bytes
 
 
-    def send(self, method='', params={}, max_bytes=10000):
+    def send(self, method='', params={}):
 
         req = self._base.copy()
         req['method'] = method 
@@ -28,12 +28,13 @@ class Client(object):
         req['id'] = uuid.uuid4().hex        
         
         bjson = orjson.dumps(req)
+        #print(req)
         buflen = 0
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((self.addr, self.port))
             sock.sendall(bjson)
-            data += sock.recv(self.max_bytes)
+            data = sock.recv(self.max_bytes)
         
-        return orjson.load(data)
+        return orjson.loads(data)
         
