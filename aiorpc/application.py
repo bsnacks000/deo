@@ -87,12 +87,13 @@ class Application(object):
             contextdata_handler.write_to_result(res)
         #except ChainWrapperError as err <-------XXX preserve data from error chain (detail)
         except Exception as err: 
-            parital = True 
+            partial = True 
             contextdata_handler.write_to_error({'error': 'obj'})  # XXX todo 
             raise 
+        
         finally: 
             #print(contextdata_handler.contextdata.result)
-            return contextdata_handler.dump_data()   
+            return contextdata_handler.dump_data(partial=partial)   
 
     async def handle_request(self, raw_request):
         """ Parse the method from the raw request object, create the context data and run. If its a list we run 

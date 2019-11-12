@@ -6,18 +6,15 @@ import marshmallow as ma
 
 
 class AddParamsSchema(ma.Schema):
-
     a = ma.fields.Integer()
     b = ma.fields.Integer()
 
 
 class AddResultSchema(ma.Schema):
-
     c = ma.fields.Integer()
 
 
 class AddSchema(JsonRPCSchema):
-
     params = ma.fields.Nested(AddParamsSchema)
     result = ma.fields.Nested(AddResultSchema)
 
