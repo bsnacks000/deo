@@ -26,6 +26,10 @@ class ContextDataHandler(object):
         return self._contextdata
 
 
+    def get_params(self):
+        return self._contextdata.params 
+
+
     def write_to_result(self, result):
         """ Assign result object onto contextdata
         """
@@ -71,26 +75,25 @@ class Application(object):
         """ Blocking calls happen in a threadpool executor
         """
         entry = self._entrypoint_registry.get_entrypoint(raw_request['method'])  # <-- XXX error handling 
-        
         contextdata_handler = ContextDataHandler(raw_request, entry.schema_class)   # <--- XXX error on load must be handled
-        params = contextdata_handler.contextdata.params
+        params = contextdata_handler.get_params()
 
         # TODO <- check params against entry.args/kwargs 
         partial = False 
-
         try:
-            if isinstance(params, list):    # <---- XXX runtime error handling  
+            if params is None:
+                res = entry.func()
+            elif isinstance(params, list):    # <---- XXX runtime error handling  
                 res = entry.func(*params)
             else:
                 res = entry.func(**params)
-            #print(res)
             contextdata_handler.write_to_result(res)
         #except ChainWrapperError as err <-------XXX preserve data from error chain (detail)
         except Exception as err: 
             partial = True 
             contextdata_handler.write_to_error({'error': 'obj'})  # XXX todo 
             raise 
-        
+
         finally: 
             #print(contextdata_handler.contextdata.result)
             return contextdata_handler.dump_data(partial=partial)   
@@ -133,7 +136,6 @@ class _JSONRPCProtocol(asyncio.Protocol):
         logger.info(' ----> Sending: {!r}'.format(data))
 
         self.transport.write(data)
-
         logger.info(' ----> Closing Connection:')
         self.transport.close()
 
