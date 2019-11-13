@@ -24,42 +24,36 @@ logger = logging.getLogger(__name__)
 # these extra handlers are need in the threadpool
 
 
-def _handle_bad_decode():
-    """ Since we might have to parse a list this gets before a context is established. 
-    """
-    return 
+def rpc_error_handler(method):
+
+    @functools.wraps(method)
+    def _inner(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except AiorpcException as err: 
+            #handler here     
+
+    return _inner 
 
 
-def _handle_null_batch():
-    """ This is a special handler because we don't have a context yet. 
-    """
-    return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}, "id": None})
-
-
-def _check_params(params, entry):
-    # XXX not sure the best way to check. In reality we need type info. 
-    pass 
 
 class ContextDataHandler(object):
     """ used internally by methodology to handle the contextdata object. Proxies many calls to
     the contexted data interface and has access to the contextdata's related schema.
     """
 
-    def __init__(self, data):
+    def __init__(self, data, schema_class, **schema_kwargs):
         self.data = data 
-        self._schema = None
-        self._contextdata = None
+        self._schema = schema_class(**schema_kwargs)
+        self._contextdata = self._schema.load(self.data)
 
     @property
     def contextdata(self):
         return self._contextdata
 
 
-    def initialize_schema(self, schema_class, **schema_kwargs):
-        """ Initialize the correct schema and load the object.
-        """
-        self._schema = schema_class(**schema_kwargs)
-        self._contextdata = self._schema.load(self.data)
+    def get_id(self):
+        return self._contextdata.id 
 
 
     def get_params(self):
@@ -69,13 +63,12 @@ class ContextDataHandler(object):
     def write_to_result(self, result):
         """ Assign result object onto contextdata
         """
-        self._contextdata.result = result
-
+        self._contextdata.result = result 
 
     def write_to_error(self, err):
         """ Assign an error object to the context
         """
-        self._contextdata.error = err
+        self._contextdata.error = err 
 
 
     def dump_data(self):
@@ -105,137 +98,146 @@ class Application(object):
         return self._entrypoint_registry
 
 
-    def _decode_request(self, data):
-        try:
-            return self.parser.decode(data)
-        except orjson.JSONDecodeError as err:
-            raise ParseError from err 
 
-    def _encode_response(self, obj):
-        try:
-            if obj['id'] is not None:  # <-- handles rpc-notifications though we don't plan on using it.
-                return self.parser.encode(obj)
-        except orjson.JSONEncodeError as err:
-            raise ParseError from err 
 
     
-    def _handle_error_detail_from_exception(self, exc, contextdata_handler, data={}):
-        """ This handler is used inside the threadpool. This writes and 
+    def _handle_error_detail_with_contextdata_handler(self, exc, contextdata_handler, detail={}):
+        """ This handler is used inside the threadpool. This assumes that we have a valid 
+        contextdata that can write directly to the response object.
         """
-        detail =  { 'code': exc.error_code, 'message': exc.message, 'data': data}
+        detail = {'code': exc.error_code, 'message': exc.message, 'data':{'detail': detail}}
         contextdata_handler.write_to_error(detail)      
         return contextdata_handler.dump_data()
 
 
+    def _handle_full_error(self, exc, data):
+        """ This handles errors by writing a response directly when we don't have a contextdata object.
+        """
+        id_ = data['id'] if 'id' in data else None 
+        exc.obj = self.parser.encode({"jsonrpc": "2.0", "error": {"code": exc.error_code, "message": exc.message}, "id": id_})
+        return exc 
+
+    def _prepare_contextdata(self, data):
+
+        contextdata_handler = ContextDataHandler(data)  # <--- push data into contextdata handler 
+   
+        if 'method' not in data:
+            logger.error('Invalid request')
+            exc = InvalidRequest() # < no context yet this is a problem for error handling.
+            exc = self._handle_full_error(exc, data)
+            raise exc 
+
+        try:
+            entry = self._entrypoint_registry.get_entrypoint(data['method']) 
+            contextdata_handler.initialize_schema(entry.schema_class)   
+
+        except KeyError as err:
+            logger.error('Method not found')
+            exc = MethodNotFound()
+            exc = self._handle_full_error(exc, data)
+            raise exc  
+
+        except ma.ValidationError as err:
+            logger.error('Invalid request')
+            exc = InvalidRequest()
+            exc = self._handle_full_error(exc, data) 
+            raise exc 
+        
+        return entry, contextdata_handler
+
     # TODO << this is not finished... error handling needed. All errors should map to an error object call with RPC errors.
+    @rpc_error_handler
     def _run_in_executor(self, data):
         """ This is the main call that gets run on the threadpool executor. Most RPC exceptions are handled here except a 
         few that can occur before we have access to a context handler. 
-        """        
-        try:
-            contextdata_handler = ContextDataHandler(data)  # <--- push data into contextdata handler 
-   
-            if 'method' not in data:
-                logger.error('Invalid request')
-                raise InvalidRequest # < no context yet this is a problem for error handling.
-
-            # XXX this is a problem... we nned the entrypoint to get the schema reference, but we need the schema 
-            # to correctly write the error object. I need to decouple these pieces somehow... 
-            try:
-                entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            except KeyError as err:
-                logger.error('Method not found')
-                raise MethodNotFound from err  # <--- XXX no context yet this is a problem for error handling.  
-
-            try:
-                contextdata_handler.initialize_schema(entry.schema_class)   
-            except ma.ValidationError as err:
-                logger.error('Invalid request')
-                raise InvalidRequest from err  
-            
-            params = contextdata_handler.get_params() # XXX this is an important step that is difficult to do correctly. 
-            #_check_params(params)
-
-            try:
-                if params is None:
-                    res = entry.func()
-                elif isinstance(params, list): 
-                    res = entry.func(*params)
-                else:
-                    res = entry.func(**params)
-                contextdata_handler.write_to_result(res)    # <--- write to result here
-                response = contextdata_handler.dump_data()
-                
-            except ChainError as err: 
-                logger.error('A Chain error occurred. Recovered data in error detail')
-                response = self._handle_error_detail_from_exception(err, contextdata_handler, data=err.context) 
-                
-            except Exception as err:
-                logger.error('An unhandled exception occured.')
-                raise InternalError from err 
-
-        except AiorpcException as err:
-            response = self._handle_error_detail_from_exception(err, contextdata_handler, data={'detail': traceback.format_tb(err.__traceback__)}) 
-    
-        finally:
-            return self._encode_response(response)  # <--- ensure response is encoded no matter what
-
-
-    async def handle_request(self, raw_request):
-        """ Parse the method from the raw request object, create the context data and run. If its a list we run 
-        all the rquests and await the responses.
         """
-        # We need to decode the data first so we run that seperately and only pass into the main method if it is valid.
-        # This is because of how RPC spec handles batch (arrays) vs. single object requests.
-        # Almost everything else is handled inside the thread (since we are ultimately running blocking functions)
-        try:
-            data = await self.loop.run_in_executor(self._executor, self._decode_request, raw_request)
-        except ParseError as err:
-            return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}) # <-- short circut and send a standard error. No need to even put
 
-        if isinstance(data, list):
-            if len(data) == 0:  # handle empty list here (technically valid json, but not good for rpc)... short circuit
-                return orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}, "id": None})
-            futures = [self.loop.run_in_executor(self._executor, self._run_in_executor, req) for req in data]        
-            return await asyncio.gather(*futures)
+        entry, contextdata_handler = self._prepare_contextdata(data)
+        params = contextdata_handler.get_params()
+
+        if params is None:
+            res = entry.func()
+        elif isinstance(params, (list, tuple)):
+            res = entry.func(*params)
         else:
-            return await self.loop.run_in_executor(self._executor, self._run_in_executor, data)
+            res = entry.func(**kwargs)
+
+        contextdata_handler.write_to_result(res)
+        
+        if contextdata_handler.get_id() is not None:
+            return contextdata_handler.dump_data()
 
 
-
-class _JSONRPCProtocol(asyncio.Protocol):
-
-
-    def __init__(self, app): 
-        self.app = app 
-        self.loop = asyncio.get_event_loop()
+    async def handle_batch_request(self, requests):
+        futures = [self.loop.run_in_executor(self._executor, self._run_in_executor, req) for req in requests]
+        return await asyncio.gather(*futures)
 
 
-    def connection_made(self, transport):
-        peername = transport.get_extra_info('peername')
-        logger.info(' <----- ( •_•) Connection from {}'.format(peername))
-        self.transport = transport
-
-    
-    def data_received(self, data):
-        logger.info(' <---- ʕ•ᴥ•ʔ Data received: {!r}'.format(data))
-        task = self.loop.create_task(self.app.handle_request(data))
-        task.add_done_callback(self._task_response_callback)    
-
-
-    def _task_response_callback(self, task):
-        data = task.result()  # <-- returns from app.handle_request     
-        if data is not None:
-            logger.info(' ----> (~‾▿‾)~  Sending: {!r}'.format(data))
-            self.transport.write(data)
-        logger.info(' ----> Closing Connection:  ¯\_(ツ)_/¯')
-        self.transport.close()
+    async def handle_single_request(self, request):
+        return await self.loop.run_in_executor(self._executor, self._run_in_executor, request) 
 
 
 
 class TCPServer(object):
     """ Simple TCPServer that runs the application.
     """
+
+    class _JSONRPCProtocol(asyncio.Protocol):
+
+        def __init__(self, app): 
+            self.app = app 
+            self.loop = asyncio.get_event_loop()
+            self.parser = JSONByteParser()
+
+
+        def connection_made(self, transport):
+            peername = transport.get_extra_info('peername')
+            logger.info(' <----- ( •_•) Connection from {}'.format(peername))
+            self.transport = transport
+
+        
+        def data_received(self, data):
+            logger.info(' <---- ʕ•ᴥ•ʔ Data received: {!r}'.format(data))
+            try:
+                data = self._decode_request(data)
+            except ParseError as err:
+                self.transport.write(orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None})) # <-- short circut and send a standard error. No need to even put
+                self.transport.close()
+                return 
+
+            if isinstance(data, list):
+                task = self.loop.create_task(self.app.handle_batch_request(data))
+            else:
+                task = self.loop.create_task(self.app.handle_single_request(data))
+            task.add_done_callback(self._task_response_callback)    
+
+
+        def _task_response_callback(self, task):
+            data = task.result()  # <-- returns from app.handle_request     
+            if data is not None:
+                logger.info(' ----> (~‾▿‾)~  Sending: {!r}'.format(data))
+                
+                try:
+                    data = self._encode_response(data)
+                except ParseError as err:
+                    data = orjson.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None})
+                
+                self.transport.write(data)
+            logger.info(' ----> Closing Connection:  ¯\_(ツ)_/¯')
+            self.transport.close()
+
+        def _decode_request(self, data):
+            try:
+                return self.parser.decode(data)
+            except orjson.JSONDecodeError as err:
+                raise ParseError from err 
+
+        def _encode_response(self, obj):
+            try:
+                if obj['id'] is not None:  # <-- handles rpc-notifications though we don't plan on using it.
+                    return self.parser.encode(obj)
+            except orjson.JSONEncodeError as err:
+                raise ParseError from err 
 
     def __init__(self, app):
         self.app = app 
@@ -244,7 +246,7 @@ class TCPServer(object):
     def listen(self, addr='127.0.0.1', port=6666):
 
         loop = asyncio.get_event_loop()
-        coro = loop.create_server(lambda: _JSONRPCProtocol(self.app), addr, port)
+        coro = loop.create_server(lambda: self._JSONRPCProtocol(self.app), addr, port)
         server = loop.run_until_complete(coro)
 
         # Serve requests until Ctrl+C is pressed
