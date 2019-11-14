@@ -31,7 +31,7 @@ class ParseError(AiorpcException):
 
 class InvalidRequest(AiorpcException):
     error_code = -32600
-    message = 'The JSON sent is not a valid Request object.'
+    message = 'Not a valid request object'
 
 
 class MethodNotFound(AiorpcException):

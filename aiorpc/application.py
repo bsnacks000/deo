@@ -50,11 +50,12 @@ def rpc_error_handler(method):
                 detail = {
                     'code': err.error_code, 
                     'message': err.message, 
-                    'data':{'detail': traceback.format_tb(err.__traceback__)}}    
+                    'data':{'detail': traceback.format_exc()}}    
                 err.contextdata_handler.write_to_error(detail)      
                 return err.contextdata_handler.dump_data()
             else:
-                id_ = err.data['id'] if 'id' in err.data else None 
+                data = err.contextdata_handler.data
+                id_ = data['id'] if 'id' in data else None 
             return {"jsonrpc": "2.0", "error": {"code": err.error_code, "message": err.message}, "id": id_}    
 
     return _inner 
@@ -80,11 +81,15 @@ class ContextDataHandler(object):
     def data(self):
         return self._data 
 
+    @property 
+    def is_initialized(self):
+        return self._is_initialized
+
 
     def load(self, entry):
         """ We breakup the initialization here. This is to help with error handling. 
         """
-        self._schema = entry.schema_class(**schema_kwargs)
+        self._schema = entry.schema_class()
         self._contextdata = self._schema.load(self._data)
         self._is_initialized = True
 
@@ -132,6 +137,10 @@ class Application(object):
     @property 
     def entrypoint(self):
         return self._entrypoint_registry
+    
+    @property 
+    def threadpool_max_workers(self):
+        return self._threadpool_max_workers
 
 
     def _handle_rpc_error(self, rpc_exc, original_exc, contextdata_handler):
@@ -139,7 +148,7 @@ class Application(object):
         We raise the the rpc_exc from the original here. 
         """
         logger.error(rpc_exc.message)
-        rpc_exc.cxt_handler = contextdata_handler
+        rpc_exc.contextdata_handler = contextdata_handler
         raise rpc_exc from original_exc 
 
 
@@ -178,7 +187,7 @@ class Application(object):
             elif isinstance(params, (list, tuple)):
                 res = entry.func(*params)
             else:
-                res = entry.func(**kwargs)
+                res = entry.func(**params)
 
             contextdata_handler.write_to_result(res)
             
@@ -222,12 +231,17 @@ class TCPServer(object):
             try:
                 data = self._decode_request(data)
             except ParseError as err:  # <--- we short circuit here... 
-                self.transport.write(orjson.dumps(
+                self.transport.write(self._encode_response(
                     {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error on Decode"}, "id": None})) # <-- short circut and send a standard error. No need to even put
                 self.transport.close()
                 return 
 
             if isinstance(data, list): # run a batch
+                if len(data) == 0:
+                    self.transport.write(self._encode_response(
+                        {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request. Batch cannot be empty"}, "id": None}))
+                    self.transport.close()
+                    return  
                 task = self.loop.create_task(self.app.handle_batch_request(data))
             else: # run single req
                 task = self.loop.create_task(self.app.handle_single_request(data))
@@ -238,23 +252,32 @@ class TCPServer(object):
             data = task.result()  # <-- returns from app.handle_request     
             if data is not None:
                 logger.info(' ----> (~‾▿‾)~  Sending: {!r}'.format(data))
-                data = self._encode_response(data)  # <--- json should not be malformed at this point. 
-                self.transport.write(data)
+                if isinstance(data, list):
+                    data = self._encode_batch_response(data)  # <--- json should not be malformed at this point. 
+                else:
+                    data = self._encode_response(data)
+                if data is not None:
+                    self.transport.write(data)
             logger.info(' ----> Closing Connection:  ¯\_(ツ)_/¯')
             self.transport.close()
 
+
         def _decode_request(self, data):
-            try:
-                return self.parser.decode(data)
-            except orjson.JSONDecodeError as err:
-                raise ParseError from err 
+            return self.parser.decode(data)
+
+        def _encode_batch_response(self, obj):
+            for i in range(len(obj)):
+                if obj[i] is None:
+                    obj.pop(i)
+                elif obj[i]['id'] is None:
+                    obj.pop(i)
+            if len(obj) > 0:  # <--- if we popped everything out we return None 
+                return self.parser.encode(obj)
 
         def _encode_response(self, obj):
-            try:
-                if obj['id'] is not None:  # <-- handles rpc-notifications though we don't plan on using it.
-                    return self.parser.encode(obj)
-            except orjson.JSONEncodeError as err:
-                raise ParseError from err 
+            if obj['id'] is not None:  # <-- handles rpc-notifications though we don't plan on using it.
+                return self.parser.encode(obj)
+
 
     def __init__(self, application):
         self._application = application 
