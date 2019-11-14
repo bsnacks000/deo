@@ -17,6 +17,8 @@ import marshmallow as ma
 
 import traceback 
 
+from dask.distributed import Client 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -123,16 +125,20 @@ class Application(object):
     TODO methods for handling dask client. 
     """
 
-    def __init__(self, threadpool_max_workers=None):
+
+    def __init__(self, threadpool_max_workers=None):        
         self._entrypoint_registry = EntrypointRegistry()
+        
         if threadpool_max_workers is None:
-            threadpool_max_workers = multiprocessing.cpu_count() * 2 + 1 
+            threadpool_max_workers = multiprocessing.cpu_count() * 2 + 2
+
         self._threadpool_max_workers = threadpool_max_workers
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=threadpool_max_workers)
         
         self.loop = asyncio.get_event_loop()
         self.parser = JSONByteParser()
 
+        self._dask_client = None 
 
     @property 
     def entrypoint(self):
@@ -141,6 +147,20 @@ class Application(object):
     @property 
     def threadpool_max_workers(self):
         return self._threadpool_max_workers
+
+
+    @property 
+    def dask_client(self):
+        if self._dask_client is None:
+            raise AttributeError('No dask client was instantiated for this application')
+        return self._dask_client  
+
+    
+
+    def set_dask_client(self, client):
+        if not isinstance(client, Client):
+            raise TypeError('Must be an instantiated Dask Client')
+        self._dask_client = client 
 
 
     def _handle_rpc_error(self, rpc_exc, original_exc, contextdata_handler):

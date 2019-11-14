@@ -3,6 +3,7 @@ DEV-IDEAS.md
 .vscode/
 dask-*
 chain_test*
+worker-*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
