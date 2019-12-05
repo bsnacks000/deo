@@ -20,9 +20,10 @@ clean-test:
 
 
 test: clean 
-	setup.py pytest
+	pytest --cov=aiorpc tests/
 
 
 install-dev: clean
+	pip install -U -r requirements_dev.txt
 	pip install -e .[dask]
 

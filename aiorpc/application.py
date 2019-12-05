@@ -278,7 +278,7 @@ class TCPServer(object):
                     data = self._encode_response(data)
                 if data is not None:
                     self.transport.write(data)
-            logger.info(' ----> Closing Connection:  ¯\_(ツ)_/¯')
+            logger.info(' ----> Closing Connection:  (ツ)')
             self.transport.close()
 
 

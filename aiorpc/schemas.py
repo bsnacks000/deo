@@ -74,8 +74,6 @@ class JsonRPCSchemaOpts(ma.SchemaOpts):
 
     def __init__(self, meta, **kwargs):
         super().__init__(meta, **kwargs)
-        if 'params' not in self.fields:
-            raise NotImplementedError('An ma.Field must be implemented for params')
 
         self.contextdata_class = getattr(meta, 'contextdata_class', ContextData)
         if self.contextdata_class is None:
@@ -94,6 +92,7 @@ class JsonRPCSchema(ma.Schema):
     method = ma.fields.Str(required=True, load_only=True)
     error = ma.fields.Nested(_JsonRPCErrorSchema, required=False, dump_only=True)    
     result = ma.fields.Nested(_JsonRPCDefaultDetailSchema, required=False, dump_only=True)
+    params = None 
     
     OPTIONS_CLASS = JsonRPCSchemaOpts
 

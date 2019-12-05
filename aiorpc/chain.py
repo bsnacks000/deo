@@ -15,7 +15,7 @@ import inspect
 import copy
 
 from pprint import pprint
-from .exceptions import ChainArgValueError, ChainWrapperError, JoinKeyError, InvalidMethodError
+from .exceptions import ChainArgValueError, ChainWrapperError, InvalidMethodError
 
 
 class ChainableMappingProxy(collections.abc.MutableMapping):
