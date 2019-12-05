@@ -74,6 +74,9 @@ class JsonRPCSchemaOpts(ma.SchemaOpts):
 
     def __init__(self, meta, **kwargs):
         super().__init__(meta, **kwargs)
+        if 'params' not in self.fields:
+            raise NotImplementedError('An ma.Field must be implemented for params')
+
         self.contextdata_class = getattr(meta, 'contextdata_class', ContextData)
         if self.contextdata_class is None:
             raise ValueError('`contextdata_class` must be set on a ContextDataSchema')
@@ -81,13 +84,11 @@ class JsonRPCSchemaOpts(ma.SchemaOpts):
             raise ValueError('`contextdata_class` must be set to ContextData or a subclass')
 
 
-
 class JsonRPCSchema(ma.Schema):
     """ The default schema for a JSON-RPC method. It contains read and write only fields containing metadata, error and result. 
     Note that params are optional. A method should register a subclass of this class with an overridden result and params fields that will contain 
     nested implementations of the schemas. 
     """
-
     jsonrpc = ma.fields.Str(required=False, default="2.0")
     id = StringOrInt(required=False, allow_none=True)
     method = ma.fields.Str(required=True, load_only=True)
@@ -100,7 +101,6 @@ class JsonRPCSchema(ma.Schema):
         contextdata_class = ContextData
         load_only = ('params',)
         dump_only = ('result', 'error',)
-
 
     @ma.validates_schema 
     def validate_jsonrpc(self, data, **kwargs):

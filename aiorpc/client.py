@@ -14,17 +14,20 @@ class Client(object):
         'method': None
     }
 
-    def __init__(self, addr='127.0.0.1', port=6666, max_bytes=1048576):
+    def __init__(self, addr='127.0.0.1', port=6666, max_bytes=1048576, connect_timeout=5, recv_timeout=20):
         self.addr = addr 
         self.port = port  
         self.max_bytes = max_bytes
-
+        self.connect_timeout = connect_timeout
+        self.recv_timeout = recv_timeout
 
     def _send_req(self, req):
         bjson = orjson.dumps(req)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(self.connect_timeout)
             sock.connect((self.addr, self.port))
             sock.sendall(bjson)
+            sock.settimeout(self.recv_timeout)
             data = sock.recv(self.max_bytes)
         
         return orjson.loads(data)

@@ -18,6 +18,11 @@ clean-test:
 	rm -f .coverage
 	rm -fr htmlcov/
 
+
+test: clean 
+	setup.py pytest
+
+
 install-dev: clean
-	pip install -e . 
+	pip install -e .[dask]
 
