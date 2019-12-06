@@ -54,6 +54,10 @@ class ChainableMappingProxy(collections.abc.MutableMapping):
         return self._dict.__repr__()
 
 
+    def dump(self):
+        return dict(self._dict)
+
+
 class Chain(object):
     """ A chain excepts a schema object (dict or list of dicts) and performs an operation on that object.
     A chain must either work on a single object or a list of objects but not both.
