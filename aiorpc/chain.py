@@ -16,7 +16,7 @@ import copy
 
 from pprint import pprint
 from .exceptions import ChainArgValueError, ChainWrapperError, InvalidMethodError
-
+from distributed import Client 
 
 class ChainableMappingProxy(collections.abc.MutableMapping):
     """ This is a proxy to a dict_ object. Its purpose is simply to create 
@@ -160,13 +160,8 @@ def _create_args(proxy, argspec):
     return args
     
 
-def chained(result_key):
-    """ A decorator that takes lists of 1:n schema dumped by the application. It essentially handles chainable errors and manipulates the
-    state of the schema list that was provided by the application. The needed input data is extracted from all schemas in _create_args.
-    After the mapped method is run, new data is appended to the schema_lst via _update_schema_list
-    If an error occurred on the chain, the schema_lst is appended to err.context. This lets us expose a snapshot of the data run up until that
-    point, so if we are running a long chain, the data that was successfully run is preserved. These errors can be persisted in the database for
-    tracking purposes
+def chained(result_key, on_dask=False):
+    """ A decorator that maps a schema to a chain. 
     """
 
     def _decorator(method):
@@ -182,8 +177,15 @@ def chained(result_key):
                 argspec = inspect.getfullargspec(method)
                 args_dict = _create_args(proxy, argspec) #, categorical)  # build a dict of args k,v pairs
                 all_args ={**args_dict, **kwargs} # combine with current kwargs
-                output_data = method(**all_args)  #output a list of records
-               # updated_proxy = _update_proxy(proxy, output_data)  # merge into original schema_list
+
+                if on_dask: # <-- Note that this should be available on the app, but this avoids have to pass the app in. 
+                    client = Client.current()  # <-- XXX allow this ValueError ? 
+                    f = client.submit(method, **all_args)
+                    output_data = f.result()
+                
+                else:
+                    output_data = method(**all_args)  #output a list of records
+                
                 proxy[result_key] = output_data
 
             except Exception as err:

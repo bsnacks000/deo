@@ -17,9 +17,7 @@ import marshmallow as ma
 
 import traceback 
 
-from dask.distributed import Client 
-
-logging.basicConfig(level=logging.INFO)
+from dask.distributed import Client, LocalCluster
 logger = logging.getLogger(__name__)
 
 
@@ -121,16 +119,14 @@ class ContextDataHandler(object):
 class Application(object):
     """ The application object handles the entrypoint registry and manages the event loop. 
     An instance is passed to the TCPServer protocol. 
-
-    TODO methods for handling dask client. 
     """
 
 
     def __init__(self, threadpool_max_workers=None):        
         self._entrypoint_registry = EntrypointRegistry()
         
-        if threadpool_max_workers is None:
-            threadpool_max_workers = multiprocessing.cpu_count() * 2 + 2
+        if threadpool_max_workers is None:  # we can have more threads on the pool to handle rpc requests
+            threadpool_max_workers = multiprocessing.cpu_count() * 2 + 1
 
         self._threadpool_max_workers = threadpool_max_workers
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=threadpool_max_workers)
@@ -156,8 +152,9 @@ class Application(object):
         return self._dask_client  
 
     
-
     def set_dask_client(self, client):
+        """ set a dask client to be used for the duration of this application.
+        """
         if not isinstance(client, Client):
             raise TypeError('Must be an instantiated Dask Client')
         self._dask_client = client 
@@ -196,12 +193,10 @@ class Application(object):
         """ This is the main call that gets run on the threadpool executor. Most RPC exceptions are handled here except a 
         few that can occur before we have access to a context handler. 
         """
-
         entry, contextdata_handler = self._prepare_contextdata(data)
         params = contextdata_handler.get_params()
 
         try:
-        
             if params is None:
                 res = entry.func()
             elif isinstance(params, (list, tuple)):
@@ -267,7 +262,6 @@ class TCPServer(object):
                 task = self.loop.create_task(self.app.handle_single_request(data))
             task.add_done_callback(self._task_response_callback)    
 
-
         def _task_response_callback(self, task):
             data = task.result()  # <-- returns from app.handle_request     
             if data is not None:
@@ -280,7 +274,6 @@ class TCPServer(object):
                     self.transport.write(data)
             logger.info(' ----> Closing Connection:  (ツ)')
             self.transport.close()
-
 
         def _decode_request(self, data):
             return self.parser.decode(data)
@@ -310,7 +303,6 @@ class TCPServer(object):
     def listen(self, addr='127.0.0.1', port=6666):
         """ Listen on the specified addr and port
         """
-
         loop = asyncio.get_event_loop()
         coro = loop.create_server(lambda: self._JSONRPCProtocol(self._application), addr, port)
         server = loop.run_until_complete(coro)
@@ -321,9 +313,40 @@ class TCPServer(object):
         try:
             loop.run_forever()
         except KeyboardInterrupt:
+            logger.info('\nShutting Down...')
+            if self._application.dask_client:
+                self._application.dask_client.close()
             pass
 
         # Close the server
         server.close()
         loop.run_until_complete(server.wait_closed())
         loop.close()
+
+
+def create_server(application, scheduler_address='localhost', log_level='INFO', **dask_client_config):
+    """ A convenience factory method to create an application server and handle dask config. 
+    If given a remote scheduler address for a dask cluster will attempt to connect. 
+    If 'localhost' is passed will attempt to connect locally. If None will not configure a dask cluster. 
+    
+    NOTE This setup must be performed under __main__ in order for dask to be correctly instantiated. 
+
+    # TODO more config options/entrypoints for TCPServer and dask if using SSL. 
+    """
+    if not hasattr(logging, log_level):
+        raise AttributeError('{} is not a valid log level')
+
+    level = getattr(logging, 'INFO')
+    logging.basicConfig(level=level)
+
+    if scheduler_address:
+        if scheduler_address == 'localhost': # spin up localcluster 
+            cluster = LocalCluster(**dask_client_config)
+            application.set_dask_client(Client(cluster))
+            logger.info('Connected to local cluster {}'.format(cluster))
+        else:   # connect remotely 
+            application.set_dask_client(Client(args.scheduler_address, **dask_client_config))
+            logger.info('Connected to dask scheduler {}'.format(client))
+        
+    server = TCPServer(application)
+    return server

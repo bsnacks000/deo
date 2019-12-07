@@ -48,6 +48,12 @@ def test_raises_chainwrapper_error():
 
     with pytest.raises(chain.ChainWrapperError):
         calc(proxy)
+
+
+
+def test_chainwrapper_produces_expected_context():
+    proxy = chain.ChainableMappingProxy()
+    calc = FakeChain().bad()
     try:
         calc(proxy)
     except chain.ChainWrapperError as err:

@@ -7,6 +7,8 @@ import uuid
 
 
 class Client(object):
+    """ A simple blocking JSON-RPC2 TCP client that can send both single and batch requests to a running server. 
+    """
 
     _base = {
         'jsonrpc': "2.0",
