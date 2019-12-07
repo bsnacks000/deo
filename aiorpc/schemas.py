@@ -101,6 +101,7 @@ class JsonRPCSchema(ma.Schema):
         load_only = ('params',)
         dump_only = ('result', 'error',)
 
+
     @ma.validates_schema 
     def validate_jsonrpc(self, data, **kwargs):
         if data['jsonrpc'] != '2.0':
@@ -110,6 +111,7 @@ class JsonRPCSchema(ma.Schema):
     @ma.post_load
     def make_context(self, data, **kwargs):
         return self.opts.contextdata_class(**data)
+
     
     @ma.pre_dump 
     def dump_context(self, contextdata, **kwargs):
