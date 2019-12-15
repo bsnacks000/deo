@@ -20,7 +20,7 @@ clean-test:
 
 
 test: clean 
-	pytest --cov=aiorpc tests/ -v -s
+	pytest --cov=curiorpc tests/ -v -s
 
 
 install-dev: clean

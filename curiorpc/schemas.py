@@ -1,7 +1,5 @@
-import marshmallow as ma  
+import marshmallow as ma 
 import orjson 
-
-
 
 class ContextData(object):
     """ A Request Context container object.

@@ -6,9 +6,9 @@ from shutil import rmtree
 from setuptools import find_packages, setup, Command
 
 # Package meta-data.
-NAME = 'aiorpc'
+NAME = 'curiorpc'
 DESCRIPTION = 'curio + jsonrpc2'
-URL = 'https://github.com/bsnacks000/aiorpc'
+URL = 'https://github.com/bsnacks000/curiorpc'
 EMAIL = 'bsnacks000@gmail.com'
 AUTHOR = 'bsnacks000'
 REQUIRES_PYTHON = '>=3.6.0'

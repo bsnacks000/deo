@@ -1,6 +1,6 @@
 import asyncio  
-from aiorpc.application import TCPServer, Application, create_server
-from aiorpc.schemas import JsonRPCSchema 
+from curiorpc.application import TCPServer, Application, create_server
+from curiorpc.schemas import JsonRPCSchema 
 
 import marshmallow as ma 
 from distributed import Client, as_completed, LocalCluster
@@ -8,7 +8,7 @@ import argparse
 import os 
 import logging 
 
-from aiorpc.chain import ChainableMappingProxy
+from curiorpc.chain import ChainableMappingProxy
 from tests.test_chain import FakeChain 
 
 app = Application()
