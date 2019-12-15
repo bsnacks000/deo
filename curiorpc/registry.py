@@ -62,11 +62,12 @@ class EntrypointRegistry(object):
 
 
     def register(self, schema_name):
-        """ Creates an entrypoint for an application in the registry.
+        """ Creates an entrypoint for an application in the registry. These are the coroutine handlers 
+        that the application uses.
         """
-        def _constructor(func):
-            entry = create_entrypoint(func, schema_name)
+        def _constructor(coro):
+            entry = create_entrypoint(coro, schema_name)
             self._update_registry(entry) # maybe update registry if it is a new entry
-            return func
+            return coro
         return _constructor
 

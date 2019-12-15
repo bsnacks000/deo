@@ -22,8 +22,6 @@ class AddSchema(JsonRPCSchema):
     result = ma.fields.Nested(AddResultSchema)
 
 
-
-
 def test_contextdata():
     c = ContextData()
     assert c.jsonrpc == '2.0'
