@@ -20,10 +20,10 @@ clean-test:
 
 
 test: clean 
-	pytest --cov=curiorpc tests/ -v -s
+	pytest --cov=curiorpc --cov-report=term-missing tests/ -v -s
 
 
 install-dev: clean
 	pip install -U -r requirements_dev.txt
-	pip install -e .[dask]
+	pip install -e .
 

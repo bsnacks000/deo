@@ -17,7 +17,7 @@ VERSION = '0.1.0'
 # What packages are required for this module to be executed?
 REQUIRED_PACKAGES = [
     'curio',
-    'lima',
+    'marshmallow',
     'orjson'
 ]
 
@@ -33,9 +33,9 @@ SETUP_REQUIRES = [
 ] 
 
 # What packages are optional?
-# EXTRAS = {
-#     'dask': ['dask', 'distributed'],
-# }
+EXTRAS = {
+    #'dask': ['dask', 'distributed'],
+}
 
 here = os.path.abspath(os.path.dirname(__file__))
 

@@ -103,7 +103,7 @@ class JsonRPCSchema(ma.Schema):
     @ma.validates_schema 
     def validate_jsonrpc(self, data, **kwargs):
         if data['jsonrpc'] != '2.0':
-            raise ValidationError('jsonrpc must be set to 2.0')
+            raise ma.ValidationError('jsonrpc must be set to 2.0')
     
 
     @ma.post_load
