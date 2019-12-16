@@ -10,12 +10,17 @@ import functools
 
 import logging 
 logger = logging.getLogger(__name__)
+# XXX <---- replace with aiologger...
 
 import concurrent.futures
-_executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
+import multiprocessing
+_cpu_count = multiprocessing.cpu_count()
+
 
 def rpc_error_handler(method):
-    """ A decorator that handles the logic of reporting the various RPC errors.
+    """ A decorator that handles the logic of reporting the various RPC errors. It will handle dumping the 
+    correct schema if a contextdata_handler is present and active. If not then it will construct its own message. 
+    It returns the response as a dictionary but does not serialize it. 
     """
     @functools.wraps(method)
     async def _inner(*args, **kwargs):
@@ -32,14 +37,14 @@ def rpc_error_handler(method):
                     'message': err.message, 
                     'data':{'detail': traceback.format_exc()}}    
                 err.contextdata_handler.write_to_error(detail) # we write this detail to the error field.     
-                loop = asyncio.get_running_loop()
-                return await loop.run_executor(_executor, err.contextdata_handler.dump_data)
+                
+                app = Application.current_app() # <-- get the active application 
+                return await app.loop.run_executor(current_app.processpool_executor, err.contextdata_handler.dump_data)
             else:
                 data = err.contextdata_handler.data if err.contextdata_handler.data is not None else {} 
                 id_ = data['id'] if 'id' in data else None 
             
             return {"jsonrpc": "2.0", "error": {"code": err.error_code, "message": err.message}, "id": id_}    
-
     return _inner 
 
 
@@ -103,11 +108,9 @@ class ContextDataHandler(object):
         return self._schema.dump(self._contextdata) 
 
 
-
 class Application(object):
     """ An application object. 
     """
-
     __singleton = None  
     
 
@@ -120,9 +123,66 @@ class Application(object):
     def __init__(self):
         self._entrypoint_registry = EntrypointRegistry() 
         self._parser = JSONByteParser()
-        self.loop = None
+        self._loop = None   # initialized just in time via handle method
 
+        # We keep these running... can be used for entrypoints but also for internals (deserialization/parsing) 
+        self._processpool_executor = concurrent.futures.ProcessPoolExecutor(max_workers=_cpu_count)
+        self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_cpu_count * 2 + 3)
+
+
+    @property 
+    def entrypoint(self):
+        """ shortcut used to wrap an entrypoint coroutine 
+        """
+        return self._entrypoint_registry.register
+
+
+    @property 
+    def threadpool_executor(self):
+        return self._threadpool_executor 
+
+
+
+    def run_blocking(self, pool='thread'):
+        """ Wrap a blocking call in one of the app executors and return an awaitable. 
+        """
+        if pool == 'thread':
+            exec_ = self._threadpool_executor
+        elif pool == 'process'
+            exec_ = self._processpool_executor
+
+        @functools.wraps(func)
+        async def _wrapped_func(*args, **kwargs):
+            f = functools.partial(func, *args, **kwargs)
+            return await self._loop.run_in_executor(exec_, f)
+
+        return _wrapped_func
+
+
+    @property 
+    def processpool_executor(self):
+        return self._processpool_executor
+
+
+    @classmethod 
+    def current_app(cls):
+        """ Can be used to access the Application singleton. Will fail if no app has been initialized.
+        """
+        if cls.__singleton is None:
+            raise ValueError('An Application needs to be instantiated')
+        return cls.__singleton
+
+
+    @property 
+    def current_loop(self):
+        """ Returns the active loop. Will fail if no loop has been initialized
+        """
+        if self._loop is None:
+            raise ValueError('An event loop has not yet been set on the Application instance')
+        return self._loop
+        
     
+
     def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
         """ This assures that errors are logged and that a contextdata_handler is bound to the exception. 
         We raise the the rpc_exc from the original here. 
@@ -136,6 +196,7 @@ class Application(object):
             raise rpc_exc from original_exc 
         else:
             raise rpc_exc
+
 
     def _prepare_contextdata(self, data):
         """ This takes the raw data. 
@@ -154,6 +215,7 @@ class Application(object):
             self._handle_rpc_error(exc, err, contextdata_handler)
 
         return entry, contextdata_handler
+
 
     @rpc_error_handler
     async def _handle_single_request(self, parsed_data):
@@ -178,7 +240,7 @@ class Application(object):
         assure that potentially ParseError's are caught. 
         """
         try:
-            parsed_data = await self.loop.run_in_executor(_executor, self._parser.decode, data)  # not sure if this is fast enough to run in a thread
+            parsed_data = await self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)  # prob fast enough for a thread
 
         except exceptions.ParseError as err:
             self._handle_rpc_error(err)
@@ -196,8 +258,8 @@ class Application(object):
         """ we need to nest the decoding logic. Encoding should never fail. This assures that if 
         a ParseError occurs it is correctly encoded in bytes before being sent.
         """
-        if self.loop is None:
-            self.loop = asyncio.get_running_loop()
+        if self._loop is None: # XXX possibly set elsewhere, though this will work...
+            self._loop = asyncio.get_running_loop()
+        
         result = await self._handle(data)
-        #print(result)
-        return await self.loop.run_in_executor(_executor, self._parser.encode, result)  # not sure if this is fast enough to run in a thread 
+        return await self._loop.run_in_executor(self._threadpool_executor, self._parser.encode, result) 
