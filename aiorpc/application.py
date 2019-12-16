@@ -51,6 +51,11 @@ def rpc_error_handler(method):
 
 
 class ContextDataHandler(object):
+    """ A helper class that uses the schema to create a ContextData object 
+    that params and results can be read/written to. We defer data initialization 
+    so that we can still reference this object during error handling regardless of 
+    whether data was given. 
+    """
 
     def __init__(self):
         self._data = None 
@@ -83,7 +88,7 @@ class ContextDataHandler(object):
         """ Allows us to lazily initialize the object 
         """
         self._schema = entry.schema_class() 
-        self._contextdata = self._schema.load(data)
+        self._contextdata = self._schema.load(self._data)
 
     
     def get_id(self):
@@ -198,40 +203,58 @@ class Application(object):
             raise rpc_exc
 
 
-    def _prepare_contextdata(self, data):
-        """ This takes the raw data. 
-        """
-        contextdata_handler = ContextDataHandler(data) # <--- push data into contextdata handler
+    def _create_contextdata(self, data):
+        """ This takes the raw data, builds a ContextDataHandler and gives to the main thread.
+        """ 
+        entry = None
+        contextdata_handler = ContextDataHandler() # <--- push data into contextdata handler
+
         try:
             entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            contextdata_handler.load(entry)
+            contextdata_handler.load_data(data)
+            contextdata_handler.load_entrypoint(entry)
 
-        except KeyError as err:
-            exc = MethodNotFound()
-            self._handle_rpc_error(exc, err, contextdata_handler)
-
-        except ma.ValidationError as err:
-            exc = InvalidRequest()
-            self._handle_rpc_error(exc, err, contextdata_handler)
-
-        return entry, contextdata_handler
+        finally:
+            return entry, contextdata_handler
 
 
     @rpc_error_handler
-    async def _handle_single_request(self, parsed_data):
+    async def _handle_single_request(self, data):
         """ The complete logic for a single request.  All blocking internal APIs need to be 
         awaited here. 
         """
-        print(parsed_data)
-        return parsed_data
+        try:
+            entry, contextdata_handler = await self._loop.run_in_executor(self._processpool_executor, self._create_contextdata, data)
+            params = contextdata_handler.get_params()
+            
+            if params is None:
+                res = await entry.func()
+            elif isinstance(params, (list, tuple)):
+                res = await entry.func(*params)
+            else:
+                res = await entry.func(**params)
 
+            contextdata_handler.write_to_result(res)
+            if contextdata_handler.get_id() is not None:
+                return await self._loop.run_in_executor(self._processpool_executor,contextdata_handler.dump_data)
+
+        except exceptions.RegistryEntryError as err:
+            exc = exceptions.MethodNotFound()
+            self._handle_rpc_error(exc, err, contextdata_handler)
+
+        except ma.ValidationError as err:
+            exc = exceptions.InvalidRequest()
+            self._handle_rpc_error(exc, err, contextdata_handler)
+
+        except Exception as err: 
+            exc = exceptions.InternalError()
+            self._handle_rpc_error(exc, err, contextdata_handler)
 
     async def _handle_batch_request(self, parsed_data):
         """ handles a batch request by calling _handle single request as a TaskGroup. 
         """
-        print(parsed_data)
-        return parsed_data
-
+        return await asyncio.gather([self._handle_single_request(d) for d in parsed_data])
+        
 
     @rpc_error_handler
     async def _handle(self, data):
