@@ -64,7 +64,7 @@ class _JsonRPCErrorSchema(ma.Schema):
 
     code = ma.fields.Integer(required=True)
     message = ma.fields.Str(required=True)
-    data = ma.fields.Dict(required=False, default={}) 
+    data = ma.fields.Dict(required=False) 
 
 
 

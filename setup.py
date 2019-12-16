@@ -18,7 +18,8 @@ VERSION = '0.1.0'
 REQUIRED_PACKAGES = [
     'curio',
     'marshmallow',
-    'orjson'
+    'orjson', 
+    'aiologger'
 ]
 
 TESTS_REQUIRE = [

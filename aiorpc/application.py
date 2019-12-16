@@ -8,13 +8,19 @@ from .parsers import JSONByteParser
 from . import exceptions
 import functools
 
-import logging 
-logger = logging.getLogger(__name__)
-# XXX <---- replace with aiologger...
+# import logging 
+# logger = logging.getLogger(__name__)
+# # XXX <---- replace with aiologger...
+
+import aiologger
+
 
 import concurrent.futures
 import multiprocessing
 _cpu_count = multiprocessing.cpu_count()
+
+import marshmallow as ma
+import traceback
 
 
 def rpc_error_handler(method):
@@ -37,9 +43,8 @@ def rpc_error_handler(method):
                     'message': err.message, 
                     'data':{'detail': traceback.format_exc()}}    
                 err.contextdata_handler.write_to_error(detail) # we write this detail to the error field.     
-                
                 app = Application.current_app() # <-- get the active application 
-                return await app.loop.run_executor(current_app.processpool_executor, err.contextdata_handler.dump_data)
+                return await app.current_loop.run_in_executor(app.processpool_executor, err.contextdata_handler.dump_data)
             else:
                 data = err.contextdata_handler.data if err.contextdata_handler.data is not None else {} 
                 id_ = data['id'] if 'id' in data else None 
@@ -110,7 +115,25 @@ class ContextDataHandler(object):
         self._contextdata.error = err
 
     def dump_data(self):
-        return self._schema.dump(self._contextdata) 
+        # print(self._contextdata.to_dict())
+        obj = self._schema.dump(self._contextdata) 
+        # I'm not sure why but I need to pop these here if no error was thrown. thought ma would do.
+        if 'error' in obj:
+            if len(obj['error']) == 0:
+                del obj['error']
+        elif 'result' in obj:
+            if len(obj['result']) == 0:
+                del obj['result']
+        return obj
+
+
+def run_on_thread(func):
+    app = Application.current_app() 
+    async def _wrapped_coro(*args, **kwargs):
+        f = functools.partial(func, *args, **kwargs)
+        return await app.current_loop.run_in_executor(app.threadpool_executor, f)
+    return _wrapped_coro
+
 
 
 class Application(object):
@@ -146,24 +169,6 @@ class Application(object):
     def threadpool_executor(self):
         return self._threadpool_executor 
 
-
-
-    def run_blocking(self, pool='thread'):
-        """ Wrap a blocking call in one of the app executors and return an awaitable. 
-        """
-        if pool == 'thread':
-            exec_ = self._threadpool_executor
-        elif pool == 'process'
-            exec_ = self._processpool_executor
-
-        @functools.wraps(func)
-        async def _wrapped_func(*args, **kwargs):
-            f = functools.partial(func, *args, **kwargs)
-            return await self._loop.run_in_executor(exec_, f)
-
-        return _wrapped_func
-
-
     @property 
     def processpool_executor(self):
         return self._processpool_executor
@@ -188,15 +193,19 @@ class Application(object):
         
     
 
-    def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
+    async def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
         """ This assures that errors are logged and that a contextdata_handler is bound to the exception. 
         We raise the the rpc_exc from the original here. 
         """
+        logger = aiologger.Logger.with_default_handlers(name=__name__)
+
         logger.error(rpc_exc.message)
         if not contextdata_handler:
             contextdata_handler = ContextDataHandler()
 
         rpc_exc.contextdata_handler = contextdata_handler
+        await logger.shutdown()
+
         if original_exc:
             raise rpc_exc from original_exc 
         else:
@@ -223,8 +232,13 @@ class Application(object):
         """ The complete logic for a single request.  All blocking internal APIs need to be 
         awaited here. 
         """
+        contextdata_handler = ContextDataHandler()
+
         try:
-            entry, contextdata_handler = await self._loop.run_in_executor(self._processpool_executor, self._create_contextdata, data)
+            entry = self._entrypoint_registry.get_entrypoint(data['method']) 
+            contextdata_handler.load_data(data)
+            await  self._loop.run_in_executor(self._threadpool_executor, contextdata_handler.load_entrypoint, entry)
+
             params = contextdata_handler.get_params()
             
             if params is None:
@@ -233,6 +247,7 @@ class Application(object):
                 res = await entry.func(*params)
             else:
                 res = await entry.func(**params)
+        
 
             contextdata_handler.write_to_result(res)
             if contextdata_handler.get_id() is not None:
@@ -240,20 +255,20 @@ class Application(object):
 
         except exceptions.RegistryEntryError as err:
             exc = exceptions.MethodNotFound()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            await self._handle_rpc_error(exc, err, contextdata_handler)
 
         except ma.ValidationError as err:
             exc = exceptions.InvalidRequest()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            await self._handle_rpc_error(exc, err, contextdata_handler)
 
         except Exception as err: 
             exc = exceptions.InternalError()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            await self._handle_rpc_error(exc, err, contextdata_handler)
 
     async def _handle_batch_request(self, parsed_data):
         """ handles a batch request by calling _handle single request as a TaskGroup. 
         """
-        return await asyncio.gather([self._handle_single_request(d) for d in parsed_data])
+        return await asyncio.gather(*[self._handle_single_request(d) for d in parsed_data])
         
 
     @rpc_error_handler
@@ -266,12 +281,12 @@ class Application(object):
             parsed_data = await self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)  # prob fast enough for a thread
 
         except exceptions.ParseError as err:
-            self._handle_rpc_error(err)
+            await self._handle_rpc_error(err)
 
         if isinstance(parsed_data, list):  # <-- batch handle
             if len(data) == 0:
                 exc = exceptions.ParseError()
-                self._handle_rpc_error(exc)
+                await self._handle_rpc_error(exc)
             return await self._handle_batch_request(parsed_data)
         else:
             return await self._handle_single_request(parsed_data)

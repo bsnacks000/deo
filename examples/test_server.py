@@ -26,6 +26,17 @@ class AddSchema(JsonRPCSchema):
     result = ma.fields.Nested(AddResultSchema)
 
 
+
+def do_add(a, b):
+    return {'c': a + b}
+
+
+@app.entrypoint('AddSchema')
+async def add(a, b):
+    app = Application.current_app()
+    return await app.current_loop.run_in_executor(app.processpool_executor, do_add, a, b)
+
+
 if __name__ == '__main__':
     server = TCPServer(app)
     asyncio.run(server.listen())
