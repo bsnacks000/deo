@@ -13,7 +13,7 @@ code: -32000 -> -32099 message: Server Error -> Reserved for implementation defi
 
 # ----------------- Exceptions thrown by the rpc server
 
-class AiorpcException(Exception):
+class CuriorpcException(Exception):
     """ Defines a BaseException that contains a default message and JSON-rpc 2 error code """
     error_code = None 
     message = ''
@@ -24,27 +24,27 @@ class AiorpcException(Exception):
         super().__init__(*args, **kwargs)
 
 
-class ParseError(AiorpcException):
+class ParseError(CuriorpcException):
     error_code = -32700
     message = 'An error occured while parsing the JSON text.'
 
 
-class InvalidRequest(AiorpcException):
+class InvalidRequest(CuriorpcException):
     error_code = -32600
     message = 'Not a valid request object'
 
 
-class MethodNotFound(AiorpcException):
+class MethodNotFound(CuriorpcException):
     error_code = -32601 
     message = 'The requested method does not exist on this server.'
 
 
-class InvalidParams(AiorpcException):
+class InvalidParams(CuriorpcException):
     error_code = -32602
     message = 'Invalid parameters passed to requested method.'
 
 
-class InternalError(AiorpcException):
+class InternalError(CuriorpcException):
     error_code = -32603
     message = 'An internal error occurred.'
 
