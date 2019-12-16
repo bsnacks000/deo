@@ -1,4 +1,5 @@
-import curio 
+# import curio 
+import asyncio 
 
 from .registry import EntrypointRegistry 
 from .schemas import ContextData 
@@ -10,6 +11,9 @@ import functools
 import logging 
 logger = logging.getLogger(__name__)
 
+import concurrent.futures
+_executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
+
 def rpc_error_handler(method):
     """ A decorator that handles the logic of reporting the various RPC errors.
     """
@@ -18,7 +22,7 @@ def rpc_error_handler(method):
         try:
             return await method(*args, **kwargs)
 
-        except exceptions.CuriorpcException as err: 
+        except exceptions.AiorpcException as err: 
             # We check the state of the contextdata_handler... If it was correctly initialized we can write the detail
             # if not then we try to extract the id from the raw data packet and return 
             id_ = None
@@ -28,7 +32,8 @@ def rpc_error_handler(method):
                     'message': err.message, 
                     'data':{'detail': traceback.format_exc()}}    
                 err.contextdata_handler.write_to_error(detail) # we write this detail to the error field.     
-                return await curio.run_in_process(err.contextdata_handler.dump_data)
+                loop = asyncio.get_running_loop()
+                return await loop.run_executor(_executor, err.contextdata_handler.dump_data)
             else:
                 data = err.contextdata_handler.data if err.contextdata_handler.data is not None else {} 
                 id_ = data['id'] if 'id' in data else None 
@@ -98,11 +103,13 @@ class ContextDataHandler(object):
         return self._schema.dump(self._contextdata) 
 
 
+
 class Application(object):
     """ An application object. 
     """
 
     __singleton = None  
+    
 
     def __new__(cls, *args, **kwargs):
         if not cls.__singleton:
@@ -113,6 +120,7 @@ class Application(object):
     def __init__(self):
         self._entrypoint_registry = EntrypointRegistry() 
         self._parser = JSONByteParser()
+        self.loop = None
 
     
     def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
@@ -170,7 +178,8 @@ class Application(object):
         assure that potentially ParseError's are caught. 
         """
         try:
-            parsed_data = await curio.run_in_process(self._parser.decode, data)  # not sure if this is fast enough to run in a thread
+            parsed_data = await self.loop.run_in_executor(_executor, self._parser.decode, data)  # not sure if this is fast enough to run in a thread
+
         except exceptions.ParseError as err:
             self._handle_rpc_error(err)
 
@@ -187,6 +196,8 @@ class Application(object):
         """ we need to nest the decoding logic. Encoding should never fail. This assures that if 
         a ParseError occurs it is correctly encoded in bytes before being sent.
         """
+        if self.loop is None:
+            self.loop = asyncio.get_running_loop()
         result = await self._handle(data)
         #print(result)
-        return await curio.run_in_process(self._parser.encode, result)  # not sure if this is fast enough to run in a thread
+        return await self.loop.run_in_executor(_executor, self._parser.encode, result)  # not sure if this is fast enough to run in a thread 

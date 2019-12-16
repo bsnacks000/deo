@@ -4,7 +4,7 @@ import marshmallow as ma
 
 tc = unittest.TestCase()
 
-from curiorpc.schemas import ContextData, JsonRPCSchema
+from aiorpc.schemas import ContextData, JsonRPCSchema
 
 
 

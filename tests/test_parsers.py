@@ -2,8 +2,8 @@ import pytest
 import unittest 
 tc = unittest.TestCase()
 
-from curiorpc.parsers import JSONByteParser 
-from curiorpc.exceptions import ParseError
+from aiorpc.parsers import JSONByteParser 
+from aiorpc.exceptions import ParseError
 
 
 

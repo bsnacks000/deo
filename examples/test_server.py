@@ -1,7 +1,7 @@
-import curio  
-from curiorpc.application import Application
-from curiorpc.server import TCPServer
-from curiorpc.schemas import JsonRPCSchema 
+import asyncio  
+from aiorpc.application import Application
+from aiorpc.server import TCPServer
+from aiorpc.schemas import JsonRPCSchema 
 
 import marshmallow as ma 
 import os 
@@ -28,4 +28,4 @@ class AddSchema(JsonRPCSchema):
 
 if __name__ == '__main__':
     server = TCPServer(app)
-    curio.run(server.listen, with_monitor=True) 
+    asyncio.run(server.listen())
