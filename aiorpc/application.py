@@ -37,19 +37,17 @@ def rpc_error_handler(method):
             # We check the state of the contextdata_handler... If it was correctly initialized we can write the detail
             # if not then we try to extract the id from the raw data packet and return 
             id_ = None
+            detail = {'code': err.error_code, 'message': err.message, 'data':{'detail': traceback.format_exc()}}  
+
             if err.contextdata_handler.is_initialized():
-                detail = {
-                    'code': err.error_code, 
-                    'message': err.message, 
-                    'data':{'detail': traceback.format_exc()}}    
                 err.contextdata_handler.write_to_error(detail) # we write this detail to the error field.     
                 app = Application.current_app() # <-- get the active application 
-                return await app.current_loop.run_in_executor(app.processpool_executor, err.contextdata_handler.dump_data)
+                return await err.contextdata_handler.dump_data(app.processpool_executor, app.current_loop)
             else:
                 data = err.contextdata_handler.data if err.contextdata_handler.data is not None else {} 
                 id_ = data['id'] if 'id' in data else None 
             
-            return {"jsonrpc": "2.0", "error": {"code": err.error_code, "message": err.message}, "id": id_}    
+            return {"jsonrpc": "2.0", "error": {"code": err.error_code, "message": err.message, 'data':{'detail': traceback.format_exc() }}, "id": id_}    
     return _inner 
 
 
@@ -73,7 +71,7 @@ class ContextDataHandler(object):
 
     @property
     def data(self):
-        return self._data 
+        return self._data
 
 
     def is_initialized(self):
@@ -89,13 +87,15 @@ class ContextDataHandler(object):
         self._data = data
 
 
-    def load_entrypoint(self, entry):
-        """ Allows us to lazily initialize the object 
+    async def load_entrypoint(self, entry, data, executor, loop):
+        """ Allows us to lazily initialize the object. Pass in an 
+        executor to  
         """
+        self._data = data 
         self._schema = entry.schema_class() 
-        self._contextdata = self._schema.load(self._data)
+        self._contextdata = await loop.run_in_executor(
+            executor, self._schema.load, self._data)
 
-    
     def get_id(self):
         return self._contextdata.id 
 
@@ -114,10 +114,10 @@ class ContextDataHandler(object):
         """
         self._contextdata.error = err
 
-    def dump_data(self):
-        # print(self._contextdata.to_dict())
-        obj = self._schema.dump(self._contextdata) 
-        # I'm not sure why but I need to pop these here if no error was thrown. thought ma would do.
+    async def dump_data(self, executor, loop):
+        obj = await loop.run_in_executor(
+            executor, self._schema.dump, self._contextdata)
+
         if 'error' in obj:
             if len(obj['error']) == 0:
                 del obj['error']
@@ -199,32 +199,15 @@ class Application(object):
         """
         logger = aiologger.Logger.with_default_handlers(name=__name__)
 
-        logger.error(rpc_exc.message)
+        await logger.error(rpc_exc.message)
         if not contextdata_handler:
             contextdata_handler = ContextDataHandler()
 
         rpc_exc.contextdata_handler = contextdata_handler
-        await logger.shutdown()
-
         if original_exc:
             raise rpc_exc from original_exc 
         else:
             raise rpc_exc
-
-
-    def _create_contextdata(self, data):
-        """ This takes the raw data, builds a ContextDataHandler and gives to the main thread.
-        """ 
-        entry = None
-        contextdata_handler = ContextDataHandler() # <--- push data into contextdata handler
-
-        try:
-            entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            contextdata_handler.load_data(data)
-            contextdata_handler.load_entrypoint(entry)
-
-        finally:
-            return entry, contextdata_handler
 
 
     @rpc_error_handler
@@ -236,8 +219,7 @@ class Application(object):
 
         try:
             entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            contextdata_handler.load_data(data)
-            await  self._loop.run_in_executor(self._threadpool_executor, contextdata_handler.load_entrypoint, entry)
+            await contextdata_handler.load_entrypoint(entry, data, self._processpool_executor, self._loop)
 
             params = contextdata_handler.get_params()
             
@@ -248,10 +230,9 @@ class Application(object):
             else:
                 res = await entry.func(**params)
         
-
             contextdata_handler.write_to_result(res)
             if contextdata_handler.get_id() is not None:
-                return await self._loop.run_in_executor(self._processpool_executor,contextdata_handler.dump_data)
+                return await contextdata_handler.dump_data(self._processpool_executor, self._loop)
 
         except exceptions.RegistryEntryError as err:
             exc = exceptions.MethodNotFound()
@@ -264,6 +245,7 @@ class Application(object):
         except Exception as err: 
             exc = exceptions.InternalError()
             await self._handle_rpc_error(exc, err, contextdata_handler)
+
 
     async def _handle_batch_request(self, parsed_data):
         """ handles a batch request by calling _handle single request as a TaskGroup. 

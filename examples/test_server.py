@@ -39,4 +39,4 @@ async def add(a, b):
 
 if __name__ == '__main__':
     server = TCPServer(app)
-    asyncio.run(server.listen())
+    server.listen()
