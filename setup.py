@@ -7,7 +7,7 @@ from setuptools import find_packages, setup, Command
 
 # Package meta-data.
 NAME = 'aiorpc'
-DESCRIPTION = 'curio + jsonrpc2'
+DESCRIPTION = 'another jsonrpc2-http implementation'
 URL = 'https://github.com/bsnacks000/aiorpc'
 EMAIL = 'bsnacks000@gmail.com'
 AUTHOR = 'bsnacks000'
@@ -16,10 +16,10 @@ VERSION = '0.1.0'
 
 # What packages are required for this module to be executed?
 REQUIRED_PACKAGES = [
-    'curio',
-    'marshmallow',
-    'orjson', 
-    'aiologger'
+    'marshmallow>=3.1',
+    'aiohttp', 
+    'coloredlogs', 
+    'requests'
 ]
 
 TESTS_REQUIRE = [
@@ -35,7 +35,7 @@ SETUP_REQUIRES = [
 
 # What packages are optional?
 EXTRAS = {
-    #'dask': ['dask', 'distributed'],
+    'dask': ['dask', 'distributed'],
 }
 
 here = os.path.abspath(os.path.dirname(__file__))

@@ -1,6 +1,5 @@
 import asyncio  
-from aiorpc.application import Application
-from aiorpc.server import TCPServer
+from aiorpc.application import Application, ApplicationServer
 from aiorpc.schemas import JsonRPCSchema 
 
 import marshmallow as ma 
@@ -38,5 +37,5 @@ async def add(a, b):
 
 
 if __name__ == '__main__':
-    server = TCPServer(app)
+    server = ApplicationServer(app)
     server.listen()

@@ -25,5 +25,5 @@ test: clean
 
 install-dev: clean
 	pip install -U -r requirements_dev.txt
-	pip install -e .
+	pip install -e .[dask]
 

@@ -1,18 +1,20 @@
-# import curio 
 import asyncio 
+import signal
+import functools
+
+from aiohttp import web
 
 from .registry import EntrypointRegistry 
 from .schemas import ContextData 
 from .parsers import JSONByteParser
 
 from . import exceptions
-import functools
 
-# import logging 
-# logger = logging.getLogger(__name__)
-# # XXX <---- replace with aiologger...
-
-import aiologger
+import logging 
+import traceback
+import coloredlogs
+logger = logging.getLogger('asyncio')
+coloredlogs.install(level=logging.INFO)
 
 
 import concurrent.futures
@@ -20,7 +22,6 @@ import multiprocessing
 _cpu_count = multiprocessing.cpu_count()
 
 import marshmallow as ma
-import traceback
 
 
 def rpc_error_handler(method):
@@ -193,13 +194,11 @@ class Application(object):
         
     
 
-    async def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
+    def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
         """ This assures that errors are logged and that a contextdata_handler is bound to the exception. 
         We raise the the rpc_exc from the original here. 
         """
-        logger = aiologger.Logger.with_default_handlers(name=__name__)
-
-        await logger.error(rpc_exc.message)
+        logger.error(rpc_exc.message)
         if not contextdata_handler:
             contextdata_handler = ContextDataHandler()
 
@@ -219,7 +218,7 @@ class Application(object):
 
         try:
             entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            await contextdata_handler.load_entrypoint(entry, data, self._processpool_executor, self._loop)
+            await contextdata_handler.load_entrypoint(entry, data, self._processpool_executor, self._loop)  # <-- requires process
 
             params = contextdata_handler.get_params()
             
@@ -233,18 +232,18 @@ class Application(object):
             contextdata_handler.write_to_result(res)
             if contextdata_handler.get_id() is not None:
                 return await contextdata_handler.dump_data(self._processpool_executor, self._loop)
-
+            
         except exceptions.RegistryEntryError as err:
             exc = exceptions.MethodNotFound()
-            await self._handle_rpc_error(exc, err, contextdata_handler)
+            self._handle_rpc_error(exc, err, contextdata_handler)
 
         except ma.ValidationError as err:
             exc = exceptions.InvalidRequest()
-            await self._handle_rpc_error(exc, err, contextdata_handler)
+            self._handle_rpc_error(exc, err, contextdata_handler)
 
         except Exception as err: 
             exc = exceptions.InternalError()
-            await self._handle_rpc_error(exc, err, contextdata_handler)
+            self._handle_rpc_error(exc, err, contextdata_handler)
 
 
     async def _handle_batch_request(self, parsed_data):
@@ -254,32 +253,142 @@ class Application(object):
         
 
     @rpc_error_handler
-    async def _handle(self, data):
+    async def handle(self, data):
         """ parses data and inspects the result. Decides if the request is a single or batch 
         and calls the neccesary coros. All encoding is handled in the public handle method to 
         assure that potentially ParseError's are caught. 
         """
-        try:
-            parsed_data = await self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)  # prob fast enough for a thread
-
-        except exceptions.ParseError as err:
-            await self._handle_rpc_error(err)
-
-        if isinstance(parsed_data, list):  # <-- batch handle
-            if len(data) == 0:
-                exc = exceptions.ParseError()
-                await self._handle_rpc_error(exc)
-            return await self._handle_batch_request(parsed_data)
-        else:
-            return await self._handle_single_request(parsed_data)
         
-        
-    async def handle(self, data):
-        """ we need to nest the decoding logic. Encoding should never fail. This assures that if 
-        a ParseError occurs it is correctly encoded in bytes before being sent.
-        """
         if self._loop is None: # XXX possibly set elsewhere, though this will work...
             self._loop = asyncio.get_running_loop()
+
+        try:
+            parsed_data = await self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)
+
+            if isinstance(parsed_data, list):  # <-- batch handle
+                if len(data) == 0:
+                    exc = exceptions.ParseError()
+                    await self._handle_rpc_error(exc)
+                res = await self._handle_batch_request(parsed_data)
+            else:
+                res = await self._handle_single_request(parsed_data)
+
+            return await self._loop.run_in_executor(self._threadpool_executor, self._parser.encode, res)   
+
+        except exceptions.ParseError as err:
+            self._handle_rpc_error(err)
+
+
+# A HTTP POST request MUST specify the following headers:
+
+# Content-Type: MUST be application/json.
+# Content-Length: MUST contain the correct length according to the HTTP-specification.
+# Accept: MUST be application/json.
+# Of course, additional HTTP-features and -headers (e.g. Authorization) can be used.
+
+# The Request itself is carried in the body of the HTTP message.
+
+# Example:
+
+# POST /myservice HTTP/1.1
+# Host: rpc.example.com
+# Content-Type: application/json
+# Content-Length: ...
+# Accept: application/json
+
+# {
+#     "jsonrpc": "2.0",
+#     "method": "sum",
+#     "params": { "b": 34, "c": 56, "a": 12 },
+#     "id": 123
+# }
+
+
+class ApplicationServer(object):
+    """ Wrap a low-level aiohttp server and handle requests over http. Makes everyone's
+    live alot easier.
+    """
+
+    def __init__(self, application):
+        self._application = application
+
+
+    def _setup_application(self):
+        pass
+
+
+    async def serve(self, host, port):
+        """ The main business logic for the server and handler. Attempts to 
+        run the request. Will return empty body for 
+        """
+
+        async def _handler(request):
+            if not request.can_read_body:
+                return web.Response(status=400)
+
+            if request.method != 'POST':
+                return web.Response(status=405)    
+            
+            if request.headers['Content-Type'] != 'application/json':
+                return web.Response(status=415)
+            
+            data = await request.read()  # just read the bytes. we defer parsing to the application
+            result = await self._application.handle(data)
+
+            if result is None: # <--- a successful notification - no id 
+                return web.Response(status=204)
+            
+            return web.Response(body=result, status=200)
         
-        result = await self._handle(data)
-        return await self._loop.run_in_executor(self._threadpool_executor, self._parser.encode, result) 
+
+        server = web.Server(_handler)
+        runner = web.ServerRunner(server)
+        await runner.setup()
+
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+
+        logger.info('Serving on http://{}:{}'.format(host, port))
+        while True:
+            await asyncio.sleep(100*3600)
+
+
+    def listen(self, host='127.0.0.1', port=6666):
+        
+        loop = asyncio.get_event_loop()
+        try:
+            loop.run_until_complete(self.serve(host, port))
+            loop.run_forever()
+        except KeyboardInterrupt:
+            pass  
+        
+        logger.warn('Shutting down...')
+        self._application.threadpool_executor.shutdown(wait=True)
+        self._application.processpool_executor.shutdown(wait=True)
+        loop.close()
+
+
+# The HTTP response MUST specify the following headers:
+
+# Content-Type: MUST be application/json
+# Content-Length: MUST contain the correct length according to the HTTP-specification.
+# The status code SHOULD be:
+
+# 200 OK
+# for responses (both for Response and Error objects)
+
+# 204 No Response / 202 Accepted
+# for empty responses, i.e. as response to a Notification
+
+# 307 Temporary Redirect / 308 Permanent Redirect
+# for HTTP-redirections (note that the request may not be automatically retransmitted)
+
+# 405 Method Not Allowed
+# if HTTP GET is not supported: for all HTTP GET requests
+# if HTTP GET is supported: if the client tries to call a non-safe/non-indempotent method via HTTP GET
+
+# 415 Unsupported Media Type
+# if the Content-Type is not application/json
+# others
+# for HTTP-errors or HTTP-features outside of the scope of JSON-RPC
+# The Response (both on success and error) is carried in the HTTP body.
