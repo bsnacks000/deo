@@ -304,6 +304,15 @@ class Application(object):
 # }
 
 
+# NOTE add optional headers accept_encoding
+
+import time 
+
+ONE_MB = 1024 ** 2
+THREE_MB = ONE_MB * 3
+
+
+
 class ApplicationServer(object):
     """ Wrap a low-level aiohttp server and handle requests over http. Makes everyone's
     live alot easier.
@@ -331,15 +340,27 @@ class ApplicationServer(object):
             
             if request.headers['Content-Type'] != 'application/json':
                 return web.Response(status=415)
+
+            request._client_max_size = THREE_MB  # <--- its hacky but should be done elsewhere            
             
+            print(request._client_max_size)
+
             data = await request.read()  # just read the bytes. we defer parsing to the application
             result = await self._application.handle(data)
 
             if result is None: # <--- a successful notification - no id 
                 return web.Response(status=204)
             
-            return web.Response(body=result, status=200)
-        
+            #return web.Response(body=result, status=200)
+            response = web.Response(
+                body=result, 
+                status=200, 
+                zlib_executor_size=ONE_MB,
+                zlib_executor=self._application.threadpool_executor)
+
+            response.enable_compression()
+            return response
+
 
         server = web.Server(_handler)
         runner = web.ServerRunner(server)
@@ -365,6 +386,7 @@ class ApplicationServer(object):
         logger.warn('Shutting down...')
         self._application.threadpool_executor.shutdown(wait=True)
         self._application.processpool_executor.shutdown(wait=True)
+        time.sleep(1)
         loop.close()
 
 
