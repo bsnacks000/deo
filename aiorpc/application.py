@@ -307,10 +307,12 @@ class Application(object):
 # NOTE add optional headers accept_encoding
 
 import time 
+import zlib
 
+# I'm messing around with the max client_bytes to allow for bigger data... 3MB max but
+# with correct compression, data shouldn't need to get bigger.
 ONE_MB = 1024 ** 2
 THREE_MB = ONE_MB * 3
-
 
 
 class ApplicationServer(object):
@@ -343,8 +345,7 @@ class ApplicationServer(object):
 
             request._client_max_size = THREE_MB  # <--- its hacky but should be done elsewhere            
             
-            print(request._client_max_size)
-
+            # print(request._client_max_size)
             data = await request.read()  # just read the bytes. we defer parsing to the application
             result = await self._application.handle(data)
 

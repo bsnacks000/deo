@@ -17,7 +17,7 @@ VERSION = '0.1.0'
 # What packages are required for this module to be executed?
 REQUIRED_PACKAGES = [
     'marshmallow>=3.1',
-    'aiohttp', 
+    'aiohttp>=3', 
     'coloredlogs', 
     'requests'
 ]

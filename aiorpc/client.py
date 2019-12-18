@@ -3,6 +3,8 @@
 import requests
 import uuid
 import json
+import zlib
+import gzip
 
 import logging 
 logger = logging.getLogger(__name__)
@@ -32,29 +34,29 @@ class JsonRPCHttpClient(object):
 
     
     def _send_req(self, data, raise_for_status, return_obj):
-        headers = {'content-type': 'application/json'}
+        data = json.dumps(data)
+        sizeofdata = sys.getsizeof(data)
 
-        j = json.dumps(data)
-        if sys.getsizeof(json) > self.client_max_size//3:
-            headers['accept-encoding': 'gzip']
+        headers = {'content-type': 'application/json', 'Accept': 'text/plain'}
+        
+        if sizeofdata > self.client_max_size // 3:   # <--- this allows gzip compression
+            headers['accept-encoding'] = 'gzip, deflate'
+            headers['content-encoding'] = 'gzip, deflate'
+            data = gzip.compress(data.encode())
 
-        response = requests.post(self.url, json=data, headers=headers)
+        response = requests.post(self.url, data=data, headers=headers)
 
         if raise_for_status:
             response.raise_for_status()
-
         try:
             if return_obj:
-                res = response.json()
-            else:
-                res = response
-
-        except json.JSONDecodeError:
+                response = response.json()
+            return response
+        except json.JSONDecodeError as err:
             logger.error('JSON-Decode Failed')
-            res = {'error': str(error), 'response': response, 'status_code': response.status_code}
+            return {'error': 'json-decode-failed', 'response': response, 'status_code': response.status_code}
         
-        finally:
-            return res
+
 
 
     def send(self, method='', params={}, with_id=True, raise_for_status=False, return_obj=True):
