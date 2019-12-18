@@ -23,6 +23,8 @@ _cpu_count = multiprocessing.cpu_count()
 
 import marshmallow as ma
 
+from distributed import Client
+
 
 def rpc_error_handler(method):
     """ A decorator that handles the logic of reporting the various RPC errors. It will handle dumping the 
@@ -43,7 +45,7 @@ def rpc_error_handler(method):
             if err.contextdata_handler.is_initialized():
                 err.contextdata_handler.write_to_error(detail) # we write this detail to the error field.     
                 app = Application.current_app() # <-- get the active application 
-                return await err.contextdata_handler.dump_data(app.processpool_executor, app.current_loop)
+                return await err.contextdata_handler.dump_data(app.processpool_executor, app.loop)
             else:
                 data = err.contextdata_handler.data if err.contextdata_handler.data is not None else {} 
                 id_ = data['id'] if 'id' in data else None 
@@ -132,7 +134,7 @@ def run_on_thread(func):
     app = Application.current_app() 
     async def _wrapped_coro(*args, **kwargs):
         f = functools.partial(func, *args, **kwargs)
-        return await app.current_loop.run_in_executor(app.threadpool_executor, f)
+        return await app.loop.run_in_executor(app.threadpool_executor, f)
     return _wrapped_coro
 
 
@@ -153,11 +155,16 @@ class Application(object):
         self._entrypoint_registry = EntrypointRegistry() 
         self._parser = JSONByteParser()
         self._loop = None   # initialized just in time via handle method
+    
 
         # We keep these running... can be used for entrypoints but also for internals (deserialization/parsing) 
         self._processpool_executor = concurrent.futures.ProcessPoolExecutor(max_workers=_cpu_count)
         self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_cpu_count * 2 + 3)
 
+        self._dask_scheduler_address = None
+        self._dask_async_client = None 
+        self._dask_blocking_client = None 
+        
 
     @property 
     def entrypoint(self):
@@ -167,8 +174,35 @@ class Application(object):
 
 
     @property 
+    def dask_scheduler_address(self):
+        if self._dask_scheduler_address is None:
+            raise AttributeError('A dask remote scheduler address has not been set on this application')
+        return self._dask_scheduler_address
+
+
+    def connect_to_dask(self, remote_scheduler_address, client_type='both', **client_kwargs):
+        pass
+
+
+
+    def get_dask_client(self, client_type='async'):
+        """ request the appropriate connected dask client either blocking or synchronous
+        """
+
+        if client_type == 'async':
+            if self._dask_async_client is None:
+                raise AttributeError('Asynchronous dask client was not properly initialized')
+            return self._dask_async_client
+        elif client_type == 'blocking':
+            if self._dask_blocking_client is None:
+                raise AttributeError('Synchronous dask client was not properlyu initialized')    
+        else:
+            raise ValueError('client_type must either be `async` or `blocking`')
+
+    @property 
     def threadpool_executor(self):
         return self._threadpool_executor 
+
 
     @property 
     def processpool_executor(self):
@@ -180,21 +214,24 @@ class Application(object):
         """ Can be used to access the Application singleton. Will fail if no app has been initialized.
         """
         if cls.__singleton is None:
-            raise ValueError('An Application needs to be instantiated')
+            raise AttributeError('An Application needs to be instantiated')
         return cls.__singleton
 
 
-    @property 
-    def current_loop(self):
-        """ Returns the active loop. Will fail if no loop has been initialized
-        """
+    @property
+    def loop(self):
         if self._loop is None:
-            raise ValueError('An event loop has not yet been set on the Application instance')
+            raise AttributeError('A running loop needs to be set on this application')
         return self._loop
-        
     
 
-    def _handle_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
+    def set_loop(self, loop):
+        """ Set the running loop on the instance
+        """
+        self._loop = loop
+    
+
+    def _raise_rpc_error(self, rpc_exc, original_exc=None, contextdata_handler=None):
         """ This assures that errors are logged and that a contextdata_handler is bound to the exception. 
         We raise the the rpc_exc from the original here. 
         """
@@ -235,48 +272,54 @@ class Application(object):
             
         except exceptions.RegistryEntryError as err:
             exc = exceptions.MethodNotFound()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            self._raise_rpc_error(exc, err, contextdata_handler)
 
         except ma.ValidationError as err:
             exc = exceptions.InvalidRequest()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            self._raise_rpc_error(exc, err, contextdata_handler)
 
         except Exception as err: 
             exc = exceptions.InternalError()
-            self._handle_rpc_error(exc, err, contextdata_handler)
+            self._raise_rpc_error(exc, err, contextdata_handler)
 
 
     async def _handle_batch_request(self, parsed_data):
         """ handles a batch request by calling _handle single request as a TaskGroup. 
         """
         return await asyncio.gather(*[self._handle_single_request(d) for d in parsed_data])
-        
+    
 
     @rpc_error_handler
+    async def _parse_in_executor(self, data, parser_cb):
+        """ Except data and a byte parser
+        """
+        try:
+            return await self._loop.run_in_executor(self._threadpool_executor, parser_cb, data)
+        except exceptions.ParseError as err:
+            self._raise_rpc_error(err)
+    
+
+    @rpc_error_handler
+    async def _dispatch_parsed_data(self, parsed_data):
+        if isinstance(parsed_data, list):  # <-- batch handle
+            if len(parsed_data) == 0:
+                exc = exceptions.ParseError()
+                await self._raise_rpc_error(exc)
+            return await self._handle_batch_request(parsed_data)
+        else:
+            return await self._handle_single_request(parsed_data)
+
+
     async def handle(self, data):
         """ parses data and inspects the result. Decides if the request is a single or batch 
         and calls the neccesary coros. All encoding is handled in the public handle method to 
-        assure that potentially ParseError's are caught. 
-        """
-        
-        if self._loop is None: # XXX possibly set elsewhere, though this will work...
-            self._loop = asyncio.get_running_loop()
+        assure that potentially ParseError's are caught. #NOTE should always return...
+        """         
+        parsed_data = await self._parse_in_executor(data, self._parser.decode) #self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)
+        res = await self._dispatch_parsed_data(parsed_data)
+        return await self._parse_in_executor(res, self._parser.encode)
 
-        try:
-            parsed_data = await self._loop.run_in_executor(self._threadpool_executor, self._parser.decode, data)
 
-            if isinstance(parsed_data, list):  # <-- batch handle
-                if len(data) == 0:
-                    exc = exceptions.ParseError()
-                    await self._handle_rpc_error(exc)
-                res = await self._handle_batch_request(parsed_data)
-            else:
-                res = await self._handle_single_request(parsed_data)
-
-            return await self._loop.run_in_executor(self._threadpool_executor, self._parser.encode, res)   
-
-        except exceptions.ParseError as err:
-            self._handle_rpc_error(err)
 
 
 # A HTTP POST request MUST specify the following headers:
@@ -320,12 +363,14 @@ class ApplicationServer(object):
     live alot easier.
     """
 
-    def __init__(self, application):
+    def __init__(self, application, dask_scheduler_address=None):
         self._application = application
+        self._dask_scheduler_address = dask_scheduler_address
 
 
     def _setup_application(self):
         pass
+
 
 
     async def serve(self, host, port):
@@ -378,6 +423,7 @@ class ApplicationServer(object):
     def listen(self, host='127.0.0.1', port=6666):
         
         loop = asyncio.get_event_loop()
+        self._application.set_loop(loop)
         try:
             loop.run_until_complete(self.serve(host, port))
             loop.run_forever()
@@ -387,7 +433,7 @@ class ApplicationServer(object):
         logger.warn('Shutting down...')
         self._application.threadpool_executor.shutdown(wait=True)
         self._application.processpool_executor.shutdown(wait=True)
-        time.sleep(1)
+        time.sleep(5)
         loop.close()
 
 

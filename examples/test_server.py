@@ -33,7 +33,7 @@ def do_add(a, b):
 @app.entrypoint('AddSchema')
 async def add(a, b):
     app = Application.current_app()
-    return await app.current_loop.run_in_executor(app.processpool_executor, do_add, a, b)
+    return await app.loop.run_in_executor(app.processpool_executor, do_add, a, b)
 
 
 if __name__ == '__main__':

@@ -40,8 +40,8 @@ class JsonRPCHttpClient(object):
         headers = {'content-type': 'application/json', 'Accept': 'text/plain'}
         
         if sizeofdata > self.client_max_size // 3:   # <--- this allows gzip compression
-            headers['accept-encoding'] = 'gzip, deflate'
-            headers['content-encoding'] = 'gzip, deflate'
+            headers['accept-encoding'] = 'gzip'
+            headers['content-encoding'] = 'gzip'
             data = gzip.compress(data.encode())
 
         response = requests.post(self.url, data=data, headers=headers)
