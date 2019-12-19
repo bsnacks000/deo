@@ -133,13 +133,13 @@ class ContextDataHandler(object):
 class Application(object):
     """ An application object. 
     """
-    __singleton = None  
+    _singleton = None  
     
 
     def __new__(cls, *args, **kwargs):
-        if not cls.__singleton:
-            cls.__singleton = super().__new__(cls, *args, **kwargs)
-        return cls.__singleton
+        if not cls._singleton:
+            cls._singleton = super().__new__(cls, *args, **kwargs)
+        return cls._singleton
 
 
     def __init__(self):
@@ -151,9 +151,6 @@ class Application(object):
         # We keep these running... can be used for entrypoints but also for internals (deserialization/parsing) 
         self._processpool_executor = concurrent.futures.ProcessPoolExecutor(max_workers=_cpu_count)
         self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_cpu_count * 2 + 3)
-
-        self._dask_scheduler_address = None
-        self._dask_client = None
         
 
     @property 
@@ -161,33 +158,6 @@ class Application(object):
         """ shortcut used to wrap an entrypoint coroutine 
         """
         return self._entrypoint_registry.register
-
-
-    def connect_to_dask(self, scheduler_address, **client_kwargs):
-        """ connect to dask scheduler given a remote address. This must be running on another process.
-        This creates a normal blocking client. To use the blocking API care must be taken to use the client in either 
-        a thread or process. To use the async API in a coro you must pass asynchronous=True in the method call to submit or map.          
-        A convenience method is provided on the application to make this call.
-        """
-        self._dask_scheduler_address = scheduler_address
-        self._dask_client = Client(address=scheduler_address, **client_kwargs)
-        logger.info('Connected to dask scheduler {}'.format(scheduler_address))
-
-
-    @property 
-    def dask_scheduler_address(self):
-        if self._dask_scheduler_address is None:
-            raise AttributeError('A dask remote scheduler address has not been set on this application')
-        return self._dask_scheduler_address
-
-
-    @property 
-    def dask_client(self):
-        """ request 
-        """
-        if self._dask_client is None:
-            raise AttributeError('Dask client was not properly initialized')
-        return self._dask_async_client
 
 
     async def run_on_thread(self, func, *args):
@@ -200,25 +170,6 @@ class Application(object):
         """ A convenince coro to run any blocking callable on the app processpool.
         """
         return await self._loop.run_on_executor(self._processpool_executor, func, *args)
-
-
-    async def submit_on_dask(self, func, *args):
-        """ A convenience coro to run any blocking callable using the dask async client. Call can 
-        be either submit or map.
-        """ 
-        if self._dask_client is None:
-            raise AttributeError('Dask client was not properly initialized')
-
-        f = self._dask_client.submit(func, *args)
-        return await self._dask_client.gather(f, asynchronous=True)
-
-
-    async def map_on_dask(self, func, *args):
-
-        if self._dask_client is None:
-            raise AttributeError('Dask client was not properly initialized')
-        f = self._dask_client.map(func, *args)
-        return await self._dask_client.gather(f, asynchronous=True)
 
 
     @property 
@@ -235,9 +186,9 @@ class Application(object):
     def current_app(cls):
         """ Can be used to access the Application singleton. Will fail if no app has been initialized.
         """
-        if cls.__singleton is None:
+        if cls._singleton is None:
             raise AttributeError('An Application needs to be instantiated')
-        return cls.__singleton
+        return cls._singleton
 
 
     @property
@@ -342,6 +293,79 @@ class Application(object):
         return await self._parse_in_executor(res, self._parser.encode)
 
 
+
+class DaskApplication(Application):
+    """ Extends the Application to allow connectivity to a remote dask scheduler.
+    """
+
+    def __init__(self):
+        try:
+            import dask, distributed 
+        except ImportError as err:
+            logger.error('Dask not installed')
+            e = ImportError('dask and distributed packages must be installed to use this class.')
+            raise e from err
+
+        super().__init__()
+        self._dask_scheduler_address = None
+        self._dask_client = None
+
+
+    def connect_new_dask_remote(self, scheduler_address, **client_kwargs):
+        """ connect to dask scheduler given a remote address. This must be running on another process.
+        This by default creates a normal blocking client. To use the blocking API care must be taken to use the client in either 
+        a thread or process. To use the async API in a coro you must pass asynchronous=True in the method calls to submit, map persist and compute.
+        
+        TODO future dev should potentially allow for multiple dask remote connections in the same app. We would need a more complex setup then is provided
+        here but allowing one connection at a time is useful
+        """
+        
+        self._dask_scheduler_address = scheduler_address
+        self._dask_client = Client(address=scheduler_address, **client_kwargs)
+        
+        logger.info('Connected to dask scheduler {}'.format(scheduler_address))
+        return self._dask_client
+
+    @property 
+    def dask_scheduler_address(self):
+        if self._dask_scheduler_address is None:
+            raise AttributeError('A dask remote scheduler address has not been set on this application')
+        return self._dask_scheduler_address
+
+
+    @property 
+    def dask_client(self):
+        """ return the client instance.
+        """
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+        return self._dask_client
+
+
+    def create_dask_client(self, **client_kwargs):
+        """ request a new client object dynamically using the same remote address. Useful for changing the dask config on a per request 
+        basis. 
+        """ 
+        return Client(address=self._dask_scheduler_address, **client_kwargs)
+
+
+    async def submit_on_dask(self, func, *args):
+        """ A convenience coro to run any blocking callable using the dask async API.
+        """ 
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+
+        f = self._dask_client.submit(func, *args)
+        return await self._dask_client.gather(f, asynchronous=True)
+
+
+    async def map_on_dask(self, func, *args):
+        """ A convenience coro to run any blocking callable using the dask async API
+        """
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+        f = self._dask_client.map(func, *args)
+        return await self._dask_client.gather(f, asynchronous=True)
 
 
 # A HTTP POST request MUST specify the following headers:
