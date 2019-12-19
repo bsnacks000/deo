@@ -1,7 +1,7 @@
 import asyncio  
-from aiorpc.application import Application 
-from aiorpc.server import ApplicationServer
-from aiorpc.schemas import JsonRPCSchema 
+from deo.application import Application 
+from deo.server import ApplicationServer
+from deo.schemas import JsonRPCSchema 
 
 import marshmallow as ma 
 import os 

@@ -20,7 +20,7 @@ clean-test:
 
 
 test: clean 
-	pytest --cov=aiorpc --cov-report=term-missing tests/ -v -s
+	pytest --cov=deo --cov-report=term-missing tests/ -v -s
 
 
 install-dev: clean

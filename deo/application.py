@@ -36,7 +36,7 @@ def rpc_error_handler(method):
         try:
             return await method(*args, **kwargs)
 
-        except exceptions.AiorpcException as err: 
+        except exceptions.DeoException as err: 
             # We check the state of the contextdata_handler... If it was correctly initialized we can write the detail
             # if not then we try to extract the id from the raw data packet and return 
             id_ = None

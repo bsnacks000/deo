@@ -2,9 +2,9 @@ import pytest
 import unittest  
 
 
-from aiorpc.registry import inspect_function, _RegistryEntry, \
+from deo.registry import inspect_function, _RegistryEntry, \
     create_entrypoint, EntrypointRegistry
-from aiorpc.exceptions import RegistryEntryError
+from deo.exceptions import RegistryEntryError
 
 tc = unittest.TestCase()
 

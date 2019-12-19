@@ -1,4 +1,4 @@
-## aiorpc
+## deo
 ---------
 
 A lightweight framework for building scalable JSON-RPC2 microservices with asyncio, dask and marshmallow over TCP. It combines a simple decorator interface for routing, flexible processing with ``dask.distributed`` and an optional method chain based API to help simplfy complex workflows. 

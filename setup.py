@@ -6,9 +6,9 @@ from shutil import rmtree
 from setuptools import find_packages, setup, Command
 
 # Package meta-data.
-NAME = 'aiorpc'
+NAME = 'deo'
 DESCRIPTION = 'another jsonrpc2-http implementation'
-URL = 'https://github.com/bsnacks000/aiorpc'
+URL = 'https://github.com/bsnacks000/deo'
 EMAIL = 'bsnacks000@gmail.com'
 AUTHOR = 'bsnacks000'
 REQUIRES_PYTHON = '>=3.6.0'
