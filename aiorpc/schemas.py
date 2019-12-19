@@ -1,5 +1,5 @@
 import marshmallow as ma 
-import orjson 
+import rapidjson 
 
 class ContextData(object):
     """ A Request Context container object.

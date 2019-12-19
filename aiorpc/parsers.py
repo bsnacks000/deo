@@ -1,7 +1,6 @@
 """ Request parsers needed.
 """
-import orjson
-
+import rapidjson
 from .exceptions import ParseError
 
 
@@ -11,12 +10,12 @@ class JSONByteParser(object):
 
     def encode(self, data):
         try:
-            return orjson.dumps(data)
-        except orjson.JSONEncodeError as err:
+            return rapidjson.dumps(data)
+        except rapidjson.JSONEncodeError as err:
             raise ParseError from err 
 
     def decode(self, data):
         try:
-            return orjson.loads(data)
-        except orjson.JSONDecodeError as err:
+            return rapidjson.loads(data)
+        except rapidjson.JSONDecodeError as err:
             raise ParseError from err  

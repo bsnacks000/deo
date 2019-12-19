@@ -4,6 +4,7 @@ import requests
 import uuid
 import json
 import gzip
+import rapidjson
 
 import logging 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class JsonRPCHttpClient(object):
 
     
     def _send_req(self, data, raise_for_status, return_obj):
-        data = orjson.dumps(data)
+        data = rapidjson.dumps(data)
         sizeofdata = sys.getsizeof(data)
 
         headers = {

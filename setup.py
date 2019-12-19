@@ -19,7 +19,8 @@ REQUIRED_PACKAGES = [
     'marshmallow>=3.1',
     'aiohttp>=3', 
     'coloredlogs', 
-    'requests'
+    'requests', 
+    'rapidjson'
 ]
 
 TESTS_REQUIRE = [
