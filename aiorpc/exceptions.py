@@ -49,12 +49,7 @@ class InternalError(AiorpcException):
     message = 'An internal error occurred.'
 
 
-
-
-
-
-
 # ---- registry exception
-class RegistryEntryError(KeyError):
+class RegistryEntryError(KeyError, AiorpcException):
     """ Raised if the key is not present in the WorfklowRegistry"""
 

@@ -3,7 +3,6 @@
 import requests
 import uuid
 import json
-import zlib
 import gzip
 
 import logging 
@@ -13,7 +12,7 @@ import sys
 
 
 class JsonRPCHttpClient(object):
-    """
+    """ A Basic RPC client over http. Will compress content-body for requests larger then half the client_max_size.
     """
 
     _base = {
@@ -34,13 +33,16 @@ class JsonRPCHttpClient(object):
 
     
     def _send_req(self, data, raise_for_status, return_obj):
-        data = json.dumps(data)
+        data = orjson.dumps(data)
         sizeofdata = sys.getsizeof(data)
 
-        headers = {'content-type': 'application/json', 'Accept': 'text/plain'}
+        headers = {
+            'content-type': 'application/json', 
+            'accept': 'text/plain', 
+            'accept-encoding': 'gzip'
+        }
         
-        if sizeofdata > self.client_max_size // 3:   # <--- this allows gzip compression
-            headers['accept-encoding'] = 'gzip'
+        if sizeofdata > self.client_max_size // 2:   # <--- this allows gzip compression
             headers['content-encoding'] = 'gzip'
             data = gzip.compress(data.encode())
 
@@ -56,8 +58,6 @@ class JsonRPCHttpClient(object):
             logger.error('JSON-Decode Failed')
             return {'error': 'json-decode-failed', 'response': response, 'status_code': response.status_code}
         
-
-
 
     def send(self, method='', params={}, with_id=True, raise_for_status=False, return_obj=True):
         reqdata = self._base.copy()

@@ -130,15 +130,6 @@ class ContextDataHandler(object):
         return obj
 
 
-def run_on_thread(func):
-    app = Application.current_app() 
-    async def _wrapped_coro(*args, **kwargs):
-        f = functools.partial(func, *args, **kwargs)
-        return await app.loop.run_in_executor(app.threadpool_executor, f)
-    return _wrapped_coro
-
-
-
 class Application(object):
     """ An application object. 
     """
@@ -162,8 +153,7 @@ class Application(object):
         self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_cpu_count * 2 + 3)
 
         self._dask_scheduler_address = None
-        self._dask_async_client = None 
-        self._dask_blocking_client = None 
+        self._dask_client = None
         
 
     @property 
@@ -173,6 +163,17 @@ class Application(object):
         return self._entrypoint_registry.register
 
 
+    def connect_to_dask(self, scheduler_address, **client_kwargs):
+        """ connect to dask scheduler given a remote address. This must be running on another process.
+        This creates a normal blocking client. To use the blocking API care must be taken to use the client in either 
+        a thread or process. To use the async API in a coro you must pass asynchronous=True in the method call to submit or map.          
+        A convenience method is provided on the application to make this call.
+        """
+        self._dask_scheduler_address = scheduler_address
+        self._dask_client = Client(address=scheduler_address, **client_kwargs)
+        logger.info('Connected to dask scheduler {}'.format(scheduler_address))
+
+
     @property 
     def dask_scheduler_address(self):
         if self._dask_scheduler_address is None:
@@ -180,24 +181,45 @@ class Application(object):
         return self._dask_scheduler_address
 
 
-    def connect_to_dask(self, remote_scheduler_address, client_type='both', **client_kwargs):
-        pass
-
-
-
-    def get_dask_client(self, client_type='async'):
-        """ request the appropriate connected dask client either blocking or synchronous
+    @property 
+    def dask_client(self):
+        """ request 
         """
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+        return self._dask_async_client
 
-        if client_type == 'async':
-            if self._dask_async_client is None:
-                raise AttributeError('Asynchronous dask client was not properly initialized')
-            return self._dask_async_client
-        elif client_type == 'blocking':
-            if self._dask_blocking_client is None:
-                raise AttributeError('Synchronous dask client was not properlyu initialized')    
-        else:
-            raise ValueError('client_type must either be `async` or `blocking`')
+
+    async def run_on_thread(self, func, *args):
+        """ A convenience coro to run any blocking callable on the app threadpool.
+        """
+        return await self._loop.run_on_executor(self._threadpool_executor, func, *args)
+
+
+    async def run_on_process(self, func, *args):
+        """ A convenince coro to run any blocking callable on the app processpool.
+        """
+        return await self._loop.run_on_executor(self._processpool_executor, func, *args)
+
+
+    async def submit_on_dask(self, func, *args):
+        """ A convenience coro to run any blocking callable using the dask async client. Call can 
+        be either submit or map.
+        """ 
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+
+        f = self._dask_client.submit(func, *args)
+        return await self._dask_client.gather(f, asynchronous=True)
+
+
+    async def map_on_dask(self, func, *args):
+
+        if self._dask_client is None:
+            raise AttributeError('Dask client was not properly initialized')
+        f = self._dask_client.map(func, *args)
+        return await self._dask_client.gather(f, asynchronous=True)
+
 
     @property 
     def threadpool_executor(self):

@@ -4,6 +4,7 @@ DEV-IDEAS.md
 dask-*
 chain_test*
 worker-*
+*.lock 
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
