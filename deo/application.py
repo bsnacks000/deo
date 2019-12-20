@@ -19,7 +19,7 @@ coloredlogs.install(level=logging.INFO)
 
 import concurrent.futures
 import multiprocessing
-_cpu_count = multiprocessing.cpu_count()
+CPU_COUNT = multiprocessing.cpu_count()
 
 import marshmallow as ma
 
@@ -90,12 +90,11 @@ class ContextDataHandler(object):
         self._data = data
 
 
-    async def load_entrypoint(self, entry, data, executor, loop):
-        """ Allows us to lazily initialize the object. Pass in an 
-        executor to  
+    async def load_entrypoint(self, schema, data, executor, loop):
+        """ Allows us to lazily initialize this object.
         """
         self._data = data 
-        self._schema = entry.schema_class() 
+        self._schema = schema
         self._contextdata = await loop.run_in_executor(
             executor, self._schema.load, self._data)
 
@@ -120,8 +119,7 @@ class ContextDataHandler(object):
     async def dump_data(self, executor, loop):
         obj = await loop.run_in_executor(
             executor, self._schema.dump, self._contextdata)
-
-        if 'error' in obj:
+        if 'error' in obj:  # XXX should be moved to post_dump
             if len(obj['error']) == 0:
                 del obj['error']
         elif 'result' in obj:
@@ -131,10 +129,11 @@ class ContextDataHandler(object):
 
 
 class Application(object):
-    """ An application object. 
+    """ An application object. The user can set the number of background processes. 
     """
-    _singleton = None  
-    
+    _singleton = None
+    _entrypoint_registry = EntrypointRegistry()   
+    _parser = JSONByteParser()
 
     def __new__(cls, *args, **kwargs):
         if not cls._singleton:
@@ -142,22 +141,26 @@ class Application(object):
         return cls._singleton
 
 
-    def __init__(self):
-        self._entrypoint_registry = EntrypointRegistry() 
-        self._parser = JSONByteParser()
-        self._loop = None   # initialized just in time via handle method
-    
+    def __init__(self, n_processes=CPU_COUNT):
+        self._loop = None 
 
-        # We keep these running... can be used for entrypoints but also for internals (deserialization/parsing) 
-        self._processpool_executor = concurrent.futures.ProcessPoolExecutor(max_workers=_cpu_count)
-        self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_cpu_count * 2 + 3)
+        # We keep these running... can be used for entrypoints but also for internals (deserialization/parsing)
+        # We control the number of available local processes so that the application can be deployed in different configurations
+        if n_processes < 1:
+            n_processes = 1
+        self._processpool_executor = concurrent.futures.ProcessPoolExecutor(max_workers=n_processes)
+        self._threadpool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=CPU_COUNT * 2 + 3)
         
 
     @property 
     def entrypoint(self):
         """ shortcut used to wrap an entrypoint coroutine 
         """
-        return self._entrypoint_registry.register
+        return self.__class__._entrypoint_registry.register
+
+    @property 
+    def parser(self):
+        return self.__class__._parser
 
 
     async def run_on_thread(self, func, *args):
@@ -231,7 +234,7 @@ class Application(object):
                 raise ParseError('method must be included in data')
 
             entry = self._entrypoint_registry.get_entrypoint(data['method']) 
-            await contextdata_handler.load_entrypoint(entry, data, self._processpool_executor, self._loop)  # <-- requires process
+            await contextdata_handler.load_entrypoint(entry.schema, data, self._processpool_executor, self._loop)  # <-- requires process
 
             params = contextdata_handler.get_params()
             
@@ -301,7 +304,7 @@ class DaskApplication(Application):
     """ Extends the Application to allow connectivity to a remote dask scheduler.
     """
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         try:
             import dask, distributed 
         except ImportError as err:
@@ -309,7 +312,7 @@ class DaskApplication(Application):
             e = ImportError('dask and distributed packages must be installed to use this class.')
             raise e from err
 
-        super().__init__()
+        super().__init__(**kwargs)
         self._dask_scheduler_address = None
         self._dask_client = None
 

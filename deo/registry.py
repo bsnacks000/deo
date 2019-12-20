@@ -5,15 +5,8 @@ import inspect
 
 
 
-class _RegistryEntry(object):
-    """ basic registry entry for a function in our api
-    """
 
-    def __init__(self, func=None, name='', args=(), schema_class=None):
-        self.name = name
-        self.func = func
-        self.args = args
-        self.schema_class = schema_class 
+_RegistryEntry = collections.namedtuple('_RegistryEntry', ['func', 'name', 'args', 'schema'])
 
 
 def inspect_function(func):
@@ -27,16 +20,18 @@ def inspect_function(func):
     }
 
 
-def create_entrypoint(func, schema_name=''):
+def create_entrypoint(func, schema_class=''):
     """ Create a new entry class.
     """
     funcmeta = inspect_function(func)
-    schema_class = ma_class_registry.get_class(schema_name) # <-- fetch schema class here
+    if isinstance(schema_class, str):
+        schema_class = ma_class_registry.get_class(schema_class) # <-- fetch schema class here
+    
     return _RegistryEntry(
         func=func,
         args=funcmeta['args'],
         name=funcmeta['name'],
-        schema_class=schema_class,
+        schema_class=schema_class(),
     )
 
 

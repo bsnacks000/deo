@@ -22,7 +22,7 @@ class JsonRPCHttpClient(object):
         'method': None
     } 
 
-    def __init__(self, addr='127.0.0.1', port=6666, timeout=5, use_base=True, ssl=False, client_max_size=1024**2*3):
+    def __init__(self, addr='127.0.0.1', port=65432, timeout=5, use_base=True, ssl=False, client_max_size=1024**2*3):
         self.timeout = timeout 
         self.use_base = use_base 
         httpproto = 'https://' if ssl else 'http://'
